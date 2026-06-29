@@ -1,0 +1,15 @@
+[project]
+name = "Race_Manager"
+version = "0.1.0"
+description = "Default template for PDM package"
+authors = [
+    {name = "Elasche", email = "we1112@mci4me.at"},
+]
+dependencies = []
+requires-python = "==3.14.*"
+readme = "README.md"
+license = {text = "MIT"}
+
+
+[tool.pdm]
+distribution = false
