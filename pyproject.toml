@@ -1,15 +1,27 @@
 [project]
 name = "Race_Manager"
 version = "0.1.0"
-description = "Default template for PDM package"
+description = "MTB Race Manager – Pacing und Verpflegungsstrategie für Rennen"
 authors = [
-    {name = "Elasche", email = "we1112@mci4me.at"},
+    {name = "Moritz Simon", email = "mosischule2@gmail.com"},
+    {name = "Elischa Weber", email = "we1112@mci4me.at"},
 ]
-dependencies = []
-requires-python = "==3.14.*"
+dependencies = [
+    "streamlit>=1.32.0",
+    "pandas>=2.1.0",
+    "numpy>=1.26.0",
+    "plotly>=5.18.0",
+    "gpxpy>=1.6.0",
+    "fpdf2>=2.7.9",
+    "Pillow>=10.1.0",
+    "kaleido>=0.2.1",
+]
+requires-python = ">=3.11"
 readme = "README.md"
 license = {text = "MIT"}
 
-
 [tool.pdm]
 distribution = false
+
+[tool.pdm.scripts]
+start = "streamlit run main.py"

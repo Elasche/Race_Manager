@@ -1,0 +1,14 @@
+{
+  "products": [
+    {"name": "Maurten Gel 100", "type": "gel", "carbs_g": 25.0, "caffeine_mg": 0.0, "notes": ""},
+    {"name": "Maurten Gel 100 CAF 100", "type": "gel", "carbs_g": 25.0, "caffeine_mg": 100.0, "notes": "mit Koffein"},
+    {"name": "SiS Go Isotonic Gel", "type": "gel", "carbs_g": 22.0, "caffeine_mg": 0.0, "notes": "isotonisch"},
+    {"name": "SiS Beta Fuel Gel", "type": "gel", "carbs_g": 40.0, "caffeine_mg": 0.0, "notes": ""},
+    {"name": "GU Energy Gel", "type": "gel", "carbs_g": 22.0, "caffeine_mg": 0.0, "notes": ""},
+    {"name": "Maurten Drink Mix 160", "type": "drink", "carbs_g": 40.0, "caffeine_mg": 0.0, "notes": "500ml Flasche"},
+    {"name": "SiS Go Electrolyte Drink", "type": "drink", "carbs_g": 36.0, "caffeine_mg": 0.0, "notes": "500ml Flasche"},
+    {"name": "Isostar Hydrate & Perform", "type": "drink", "carbs_g": 35.0, "caffeine_mg": 0.0, "notes": "500ml Flasche"},
+    {"name": "Banana", "type": "food", "carbs_g": 27.0, "caffeine_mg": 0.0, "notes": "mittelgroß"},
+    {"name": "Müsliriegel", "type": "food", "carbs_g": 30.0, "caffeine_mg": 0.0, "notes": ""}
+  ]
+}
