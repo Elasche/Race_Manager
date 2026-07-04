@@ -27,7 +27,10 @@ from modules.streckenanalys import (
     calculate_target_time,
     detect_key_features,
     estimate_time_at_points,
+    list_saved_routes,
     load_route,
+    load_saved_route,
+    save_route_file,
     suggest_nutrition_points,
 )
 from modules.trainingsanalys import aggregate_athlete_data
@@ -136,6 +139,20 @@ def _build_nutrition_plan(route_df: Optional[pd.DataFrame] = None) -> tuple[list
     return events, points
 
 
+def _pdf_safe(text: str) -> str:
+    """
+    Ersetzt Sonderzeichen, die von der FPDF-Kernschrift nicht unterstützt werden.
+
+    Athletennamen oder Produktbezeichnungen können Zeichen wie Gedankenstriche
+    oder typografische Anführungszeichen enthalten, an denen fpdf2 sonst mit
+    FPDFUnicodeEncodingException abbricht.
+    """
+    replacements = {"–": "-", "—": "-", "’": "'", "‘": "'", "“": '"', "”": '"', "…": "..."}
+    for src, dst in replacements.items():
+        text = text.replace(src, dst)
+    return text.encode("latin-1", errors="replace").decode("latin-1")
+
+
 def _export_pdf(athlete: Optional[Athlete], route_df: Optional[pd.DataFrame],
                 nutrition_points: list[dict]) -> bytes:
     """
@@ -149,7 +166,7 @@ def _export_pdf(athlete: Optional[Athlete], route_df: Optional[pd.DataFrame],
     pdf.set_auto_page_break(auto=True, margin=15)
     pdf.add_page()
     pdf.set_font("Helvetica", "B", 20)
-    pdf.cell(0, 10, "Race Manager – Rennplan", ln=True)
+    pdf.cell(0, 10, "Race Manager - Rennplan", ln=True)
     pdf.set_draw_color(124, 58, 237)
     pdf.set_line_width(0.8)
     pdf.line(10, pdf.get_y(), 200, pdf.get_y())
@@ -160,7 +177,7 @@ def _export_pdf(athlete: Optional[Athlete], route_df: Optional[pd.DataFrame],
     pdf.set_font("Helvetica", size=11)
     if athlete:
         stats = _get_athlete_stats(athlete)
-        pdf.cell(0, 6, f"Name: {athlete.name}", ln=True)
+        pdf.cell(0, 6, f"Name: {_pdf_safe(athlete.name)}", ln=True)
         pdf.cell(0, 6, f"Jahrgang: {athlete.birth_year}  |  Alter: {athlete.age}", ln=True)
         if stats.get("ftp"):
             pdf.cell(0, 6, f"FTP: {stats['ftp']:.0f} W", ln=True)
@@ -201,7 +218,7 @@ def _export_pdf(athlete: Optional[Athlete], route_df: Optional[pd.DataFrame],
             total_min = int(p["time_min"])
             hh, mm = divmod(total_min, 60)
             pdf.cell(col_w[0], 6, f"{hh:02d}:{mm:02d}", border=1)
-            pdf.cell(col_w[1], 6, p["product_name"][:38], border=1)
+            pdf.cell(col_w[1], 6, _pdf_safe(p["product_name"])[:38], border=1)
             pdf.cell(col_w[2], 6, str(int(p["carbs_g"])), border=1)
             pdf.cell(col_w[3], 6, str(int(p["cumulative_carbs_g"])), border=1)
             pdf.ln()
@@ -298,20 +315,47 @@ with col_left:
     )
 
     st.markdown('<div class="section-label">Strecke</div>', unsafe_allow_html=True)
+
+    saved_routes = list_saved_routes()
+    if saved_routes:
+        current_name = st.session_state.route_filename
+        route_idx = saved_routes.index(current_name) if current_name in saved_routes else 0
+        chosen_route = st.selectbox(
+            "Gespeicherte Strecke wählen", saved_routes, index=route_idx,
+            label_visibility="collapsed",
+        )
+        if chosen_route != st.session_state.route_filename:
+            try:
+                df = load_saved_route(chosen_route)
+                st.session_state.route_df = df
+                st.session_state.route_filename = chosen_route
+
+                athlete = _selected_athlete()
+                ftp = _get_athlete_stats(athlete)["ftp"] if athlete and athlete.training_files else None
+                st.session_state.target_time_h = calculate_target_time(df, ftp)
+            except Exception as e:
+                st.error(f"Fehler beim Laden: {e}")
+    else:
+        st.caption("Noch keine gespeicherten Strecken.")
+
     route_file = st.file_uploader(
-        "Strecke hinzufügen (.gpx / .csv)", type=["gpx", "csv"], label_visibility="collapsed"
+        "Neue Strecke hochladen (.gpx / .csv)", type=["gpx", "csv"], label_visibility="collapsed"
     )
-    if route_file is not None:
+    if route_file is not None and route_file.name != st.session_state.get("_last_uploaded_route"):
         try:
-            df = load_route(route_file.read(), route_file.name)
+            content = route_file.read()
+            save_route_file(route_file.name, content)
+            df = load_route(content, route_file.name)
             st.session_state.route_df = df
             st.session_state.route_filename = route_file.name
+            st.session_state._last_uploaded_route = route_file.name
 
             athlete = _selected_athlete()
             ftp = _get_athlete_stats(athlete)["ftp"] if athlete and athlete.training_files else None
             suggested = calculate_target_time(df, ftp)
             st.session_state.target_time_h = suggested
-            st.success(f"{route_file.name} geladen · Vorschlag: {int(suggested)}h {int((suggested % 1)*60):02d}min")
+            st.success(f"{route_file.name} gespeichert · Vorschlag: {int(suggested)}h {int((suggested % 1) * 60):02d}min")
+            st.rerun()
         except Exception as e:
             st.error(f"Fehler beim Laden: {e}")
 

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import io
 import math
+from pathlib import Path
 from typing import Optional
 
 import numpy as np
@@ -16,6 +17,31 @@ try:
     _HAS_GPXPY = True
 except ImportError:
     _HAS_GPXPY = False
+
+ROUTES_DIR = Path("data") / "routes"
+
+
+def list_saved_routes() -> list[str]:
+    """Gibt die Dateinamen aller gespeicherten Streckendateien zurück."""
+    ROUTES_DIR.mkdir(parents=True, exist_ok=True)
+    return sorted(
+        p.name for p in ROUTES_DIR.iterdir()
+        if p.is_file() and p.suffix.lower() in (".gpx", ".csv")
+    )
+
+
+def save_route_file(filename: str, content: bytes) -> Path:
+    """Speichert eine hochgeladene Streckendatei dauerhaft in data/routes."""
+    ROUTES_DIR.mkdir(parents=True, exist_ok=True)
+    path = ROUTES_DIR / filename
+    path.write_bytes(content)
+    return path
+
+
+def load_saved_route(filename: str) -> pd.DataFrame:
+    """Lädt eine gespeicherte Streckendatei anhand ihres Dateinamens."""
+    path = ROUTES_DIR / filename
+    return load_route(path.read_bytes(), filename)
 
 
 def _haversine_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
@@ -40,6 +66,9 @@ def _add_derived_columns(df: pd.DataFrame) -> pd.DataFrame:
     df = df.copy()
     df["distance_km"] = distances
 
+    # Fehlende Höhenwerte linear interpolieren statt mit 0 aufzufüllen,
+    # sonst entstehen bei lückenhaften GPX-Tracks künstliche Klippen.
+    df["elevation"] = df["elevation"].interpolate(limit_direction="both")
     elev = df["elevation"].fillna(0).values
     dist_m = np.array(distances) * 1000.0
     grades = [0.0]
@@ -68,12 +97,15 @@ def load_route_gpx(content: bytes) -> pd.DataFrame:
                 points.append({
                     "lat": pt.latitude,
                     "lon": pt.longitude,
-                    "elevation": pt.elevation if pt.elevation is not None else 0.0,
+                    "elevation": pt.elevation if pt.elevation is not None else np.nan,
                 })
 
     if not points:
         for wp in gpx.waypoints:
-            points.append({"lat": wp.latitude, "lon": wp.longitude, "elevation": wp.elevation or 0.0})
+            points.append({
+                "lat": wp.latitude, "lon": wp.longitude,
+                "elevation": wp.elevation if wp.elevation is not None else np.nan,
+            })
 
     if not points:
         raise ValueError("GPX-Datei enthält keine verwertbaren Streckenpunkte.")
