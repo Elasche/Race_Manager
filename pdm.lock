@@ -5,7 +5,7 @@
 groups = ["default"]
 strategy = ["inherit_metadata"]
 lock_version = "4.5.0"
-content_hash = "sha256:674db9f663845cdc0d5a13b64ac05fee95aaf30ce8f3b34d685076ba44a11d07"
+content_hash = "sha256:95dd3e1f0259356a2678ddc89c7dbd4d65b4e4052dce1a2d0c453a238558d5de"
 
 [[metadata.targets]]
 requires_python = ">=3.11"
@@ -230,6 +230,15 @@ groups = ["default"]
 files = [
     {file = "defusedxml-0.7.1-py2.py3-none-any.whl", hash = "sha256:a352e7e428770286cc899e2542b6cdaedb2b4953ff269a210103ec58f6198a61"},
     {file = "defusedxml-0.7.1.tar.gz", hash = "sha256:1bb3032db185915b62d7c6209c5a8792be6a32ab2fedacc84e01b52c51aa3e69"},
+]
+
+[[package]]
+name = "fitparse"
+version = "1.2.0"
+summary = "Python library to parse ANT/Garmin .FIT files"
+groups = ["default"]
+files = [
+    {file = "fitparse-1.2.0.tar.gz", hash = "sha256:2d691022452dea6dabad13cc6e017ca467fe8a3a895cd3ac67a50a7bb716b4a9"},
 ]
 
 [[package]]

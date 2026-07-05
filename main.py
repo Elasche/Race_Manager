@@ -12,9 +12,12 @@ import streamlit as st
 from modules.athletenverwaltung import (
     Athlete,
     add_training_file,
+    assign_training_file,
     create_athlete,
     decode_photo,
     delete_athlete,
+    list_athlete_training_files,
+    list_unassigned_training_files,
     load_athletes,
     update_athlete,
 )
@@ -50,7 +53,8 @@ st.set_page_config(
     initial_sidebar_state="collapsed",
 )
 
-st.markdown("""
+st.markdown(
+    """
 <style>
     .block-container { padding-top: 1rem; padding-bottom: 0.5rem; }
     .athlete-card {
@@ -64,10 +68,13 @@ st.markdown("""
     .section-label { font-size: 0.75rem; color: #6B7280; text-transform: uppercase;
                      letter-spacing: 0.05em; margin-top: 12px; margin-bottom: 4px; }
 </style>
-""", unsafe_allow_html=True)
+""",
+    unsafe_allow_html=True,
+)
 
 
 # ── Session-State initialisieren ─────────────────────────────────────────────
+
 
 def _init_state() -> None:
     """Setzt Standardwerte für den Session-State beim ersten Aufruf."""
@@ -92,6 +99,7 @@ _init_state()
 
 # ── Hilfsfunktionen ──────────────────────────────────────────────────────────
 
+
 def _get_athletes() -> list[Athlete]:
     """Gibt die gecachte Athletenliste zurück."""
     if st.session_state.athletes_cache is None:
@@ -113,10 +121,24 @@ def _selected_athlete() -> Optional[Athlete]:
     return next((a for a in _get_athletes() if a.id == aid), None)
 
 
+@st.cache_data(show_spinner="Trainingsdaten werden analysiert…")
+def _compute_athlete_stats(athlete_id: str, file_fingerprint: tuple) -> dict:
+    """Cache-Schlüssel ist der Athlet plus ein Fingerabdruck seiner Dateien (Pfad+Änderungszeit+Größe)."""
+    return aggregate_athlete_data(list_athlete_training_files(athlete_id))
+
+
 def _get_athlete_stats(athlete: Athlete) -> dict:
-    """Berechnet FTP, MaxHR und Leistungskurve aus allen Trainingsdateien."""
-    existing = [fp for fp in athlete.training_files if Path(fp).exists()]
-    return aggregate_athlete_data(existing)
+    """
+    Berechnet FTP, MaxHR und Leistungskurve aus allen Trainingsdateien.
+
+    Das Einlesen (insb. FIT-Dateien) ist teuer – bei Athleten mit vollständiger
+    Strava-Historie (hunderte Dateien) kann das mehrere Minuten dauern. Das
+    Ergebnis wird deshalb anhand eines Datei-Fingerabdrucks gecacht, damit es
+    nicht bei jedem Streamlit-Rerun neu berechnet wird.
+    """
+    files = list_athlete_training_files(athlete.id)
+    fingerprint = tuple((fp, stat.st_mtime, stat.st_size) for fp, stat in ((f, Path(f).stat()) for f in files))
+    return _compute_athlete_stats(athlete.id, fingerprint)
 
 
 def _build_nutrition_plan(route_df: Optional[pd.DataFrame] = None) -> tuple[list, list]:
@@ -153,8 +175,7 @@ def _pdf_safe(text: str) -> str:
     return text.encode("latin-1", errors="replace").decode("latin-1")
 
 
-def _export_pdf(athlete: Optional[Athlete], route_df: Optional[pd.DataFrame],
-                nutrition_points: list[dict]) -> bytes:
+def _export_pdf(athlete: Optional[Athlete], route_df: Optional[pd.DataFrame], nutrition_points: list[dict]) -> bytes:
     """
     Erstellt eine PDF-Übersicht des Rennplans.
 
@@ -199,8 +220,12 @@ def _export_pdf(athlete: Optional[Athlete], route_df: Optional[pd.DataFrame],
     else:
         pdf.cell(0, 6, "Keine Streckendaten vorhanden", ln=True)
     pdf.ln(2)
-    pdf.cell(0, 6, f"Zielzeit: {int(st.session_state.target_time_h)}h "
-                   f"{int((st.session_state.target_time_h % 1) * 60):02d}min", ln=True)
+    pdf.cell(
+        0,
+        6,
+        f"Zielzeit: {int(st.session_state.target_time_h)}h {int((st.session_state.target_time_h % 1) * 60):02d}min",
+        ln=True,
+    )
     pdf.cell(0, 6, f"Kohlenhydrate/Stunde: {st.session_state.carbs_per_hour} g", ln=True)
     pdf.ln(4)
 
@@ -232,6 +257,7 @@ def _export_pdf(athlete: Optional[Athlete], route_df: Optional[pd.DataFrame],
 
 
 # ── Dialoge ──────────────────────────────────────────────────────────────────
+
 
 @st.dialog("Neuen Athleten anlegen")
 def _dialog_add_athlete() -> None:
@@ -272,6 +298,7 @@ def _dialog_edit_athlete(athlete: Athlete) -> None:
         if photo:
             athlete.photo_b64 = None
             import base64
+
             athlete.photo_b64 = base64.b64encode(photo.read()).decode()
         update_athlete(athlete)
         _reload_athletes()
@@ -291,14 +318,12 @@ with col_left:
 
     st.markdown('<div class="section-label">Athlet</div>', unsafe_allow_html=True)
     athlete_names = [a.name for a in athletes]
-    selected_idx = next(
-        (i for i, a in enumerate(athletes) if a.id == st.session_state.selected_athlete_id), 0
-    ) if athletes else 0
+    selected_idx = (
+        next((i for i, a in enumerate(athletes) if a.id == st.session_state.selected_athlete_id), 0) if athletes else 0
+    )
 
     if athletes:
-        chosen_name = st.selectbox(
-            "Athlet auswählen", athlete_names, index=selected_idx, label_visibility="collapsed"
-        )
+        chosen_name = st.selectbox("Athlet auswählen", athlete_names, index=selected_idx, label_visibility="collapsed")
         chosen = next(a for a in athletes if a.name == chosen_name)
         st.session_state.selected_athlete_id = chosen.id
     else:
@@ -310,8 +335,11 @@ with col_left:
     st.session_state.nutrition_type = nt_map[nt_label]
 
     st.session_state.carbs_per_hour = st.slider(
-        "Kohlenhydrate / Stunde (g)", min_value=30, max_value=120,
-        value=st.session_state.carbs_per_hour, step=5,
+        "Kohlenhydrate / Stunde (g)",
+        min_value=30,
+        max_value=120,
+        value=st.session_state.carbs_per_hour,
+        step=5,
     )
 
     st.markdown('<div class="section-label">Strecke</div>', unsafe_allow_html=True)
@@ -321,7 +349,9 @@ with col_left:
         current_name = st.session_state.route_filename
         route_idx = saved_routes.index(current_name) if current_name in saved_routes else 0
         chosen_route = st.selectbox(
-            "Gespeicherte Strecke wählen", saved_routes, index=route_idx,
+            "Gespeicherte Strecke wählen",
+            saved_routes,
+            index=route_idx,
             label_visibility="collapsed",
         )
         if chosen_route != st.session_state.route_filename:
@@ -331,7 +361,7 @@ with col_left:
                 st.session_state.route_filename = chosen_route
 
                 athlete = _selected_athlete()
-                ftp = _get_athlete_stats(athlete)["ftp"] if athlete and athlete.training_files else None
+                ftp = _get_athlete_stats(athlete)["ftp"] if athlete else None
                 st.session_state.target_time_h = calculate_target_time(df, ftp)
             except Exception as e:
                 st.error(f"Fehler beim Laden: {e}")
@@ -351,10 +381,12 @@ with col_left:
             st.session_state._last_uploaded_route = route_file.name
 
             athlete = _selected_athlete()
-            ftp = _get_athlete_stats(athlete)["ftp"] if athlete and athlete.training_files else None
+            ftp = _get_athlete_stats(athlete)["ftp"] if athlete else None
             suggested = calculate_target_time(df, ftp)
             st.session_state.target_time_h = suggested
-            st.success(f"{route_file.name} gespeichert · Vorschlag: {int(suggested)}h {int((suggested % 1) * 60):02d}min")
+            st.success(
+                f"{route_file.name} gespeichert · Vorschlag: {int(suggested)}h {int((suggested % 1) * 60):02d}min"
+            )
             st.rerun()
         except Exception as e:
             st.error(f"Fehler beim Laden: {e}")
@@ -362,17 +394,17 @@ with col_left:
     route_df = st.session_state.route_df
     if route_df is not None:
         m = calculate_route_metrics(route_df)
-        st.caption(
-            f"📍 {m['total_distance_km']} km · "
-            f"⬆ {m['elevation_gain_m']:.0f}m · "
-            f"⬇ {m['elevation_loss_m']:.0f}m"
-        )
+        st.caption(f"📍 {m['total_distance_km']} km · ⬆ {m['elevation_gain_m']:.0f}m · ⬇ {m['elevation_loss_m']:.0f}m")
 
     st.markdown('<div class="section-label">Zielzeit anpassen</div>', unsafe_allow_html=True)
     st.session_state.target_time_h = st.slider(
-        "Zielzeit (h)", min_value=0.5, max_value=12.0,
-        value=float(st.session_state.target_time_h), step=0.25,
-        format="%.2f h", label_visibility="collapsed",
+        "Zielzeit (h)",
+        min_value=0.5,
+        max_value=12.0,
+        value=float(st.session_state.target_time_h),
+        step=0.25,
+        format="%.2f h",
+        label_visibility="collapsed",
     )
     th = int(st.session_state.target_time_h)
     tm = int((st.session_state.target_time_h % 1) * 60)
@@ -411,8 +443,9 @@ with col_mid:
             with btn_cols[i % len(btn_cols)]:
                 is_sel = a.id == st.session_state.selected_athlete_id
                 label = f"**{a.name}**" if is_sel else a.name
-                if st.button(label, key=f"sel_{a.id}", use_container_width=True,
-                             type="primary" if is_sel else "secondary"):
+                if st.button(
+                    label, key=f"sel_{a.id}", use_container_width=True, type="primary" if is_sel else "secondary"
+                ):
                     st.session_state.selected_athlete_id = a.id
                     st.rerun()
     else:
@@ -448,17 +481,18 @@ with col_mid:
         )
 
         if nutrition_events:
-            st.markdown('<div class="section-label">Verpflegungsplan (ohne Strecke)</div>',
-                        unsafe_allow_html=True)
+            st.markdown('<div class="section-label">Verpflegungsplan (ohne Strecke)</div>', unsafe_allow_html=True)
             rows = []
             for e in nutrition_events:
                 h, m = divmod(int(e.time_min), 60)
-                rows.append({
-                    "Time": f"{h:02d}:{m:02d}",
-                    "Nutrition": e.product.name,
-                    "KH (g)": int(e.product.carbs_g),
-                    "KH gesamt (g)": int(e.cumulative_carbs_g),
-                })
+                rows.append(
+                    {
+                        "Time": f"{h:02d}:{m:02d}",
+                        "Nutrition": e.product.name,
+                        "KH (g)": int(e.product.carbs_g),
+                        "KH gesamt (g)": int(e.cumulative_carbs_g),
+                    }
+                )
             st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
 
 
@@ -501,8 +535,8 @@ with col_right:
         st.markdown("---")
         st.markdown('<div class="section-label">Trainingsdaten</div>', unsafe_allow_html=True)
         training_file = st.file_uploader(
-            "Trainingsdatei hinzufügen (.csv)",
-            type=["csv"],
+            "Trainingsdatei hinzufügen (.csv / .fit / .fit.gz)",
+            type=["csv", "fit", "gz"],
             key="training_upload",
             label_visibility="collapsed",
         )
@@ -515,10 +549,22 @@ with col_right:
             except Exception as e:
                 st.error(f"Fehler: {e}")
 
-        if athlete.training_files:
-            existing = [Path(fp).name for fp in athlete.training_files if Path(fp).exists()]
-            if existing:
-                st.caption(f"Dateien: {', '.join(existing)}")
+        unassigned = list_unassigned_training_files()
+        if unassigned:
+            st.caption("Bereits abgelegte, noch nicht zugeordnete Dateien:")
+            to_assign = st.multiselect(
+                "Dateien zuweisen", unassigned, key="unassigned_files", label_visibility="collapsed"
+            )
+            if to_assign and st.button(f"→ {athlete.name} zuordnen", use_container_width=True):
+                for fn in to_assign:
+                    assign_training_file(athlete.id, fn)
+                _reload_athletes()
+                st.success(f"{len(to_assign)} Datei(en) zugeordnet.")
+                st.rerun()
+
+        existing = [Path(fp).name for fp in list_athlete_training_files(athlete.id)]
+        if existing:
+            st.caption(f"Dateien: {', '.join(existing)}")
 
         st.markdown("---")
         edit_col, del_col = st.columns(2)

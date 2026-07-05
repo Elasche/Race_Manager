@@ -8,6 +8,8 @@ from typing import Optional
 import pandas as pd
 import plotly.graph_objects as go
 
+from modules.trainingsanalys import POWER_CURVE_DURATIONS
+
 ROUTE_COLOR = "#7C3AED"
 GEL_COLOR = "#111827"
 DRINK_COLOR = "#16a34a"
@@ -186,8 +188,10 @@ def create_power_curve(power_curve: dict[str, float], ftp: Optional[float] = Non
     """
     Visualisiert die Leistungskurve (Mean Maximal Power) eines Athleten.
 
-    X-Achse: Zeitdauern von 5s bis 60min, Y-Achse: maximale Durchschnittsleistung
-    in Watt. Optional wird die FTP als horizontale Linie eingezeichnet.
+    X-Achse: Zeitdauern von 5s bis zu mehreren Stunden (abhängig von der
+    längsten verfügbaren Aktivität des Athleten), Y-Achse: maximale
+    Durchschnittsleistung in Watt. Optional wird die FTP als horizontale
+    Linie eingezeichnet.
     """
     fig = go.Figure()
 
@@ -197,11 +201,14 @@ def create_power_curve(power_curve: dict[str, float], ftp: Optional[float] = Non
             xref="paper", yref="paper", x=0.5, y=0.5,
             showarrow=False, font=dict(size=12, color="#9ca3af"),
         )
-        fig.update_layout(height=170, margin=dict(l=10, r=10, t=10, b=10))
+        fig.update_layout(
+            height=170, margin=dict(l=10, r=10, t=10, b=10),
+            xaxis=dict(visible=False, range=[0, 1]),
+            yaxis=dict(visible=False, range=[0, 1]),
+        )
         return fig
 
-    order = ["5s", "10s", "30s", "1min", "5min", "10min", "20min", "60min"]
-    labels = [d for d in order if d in power_curve]
+    labels = [d for d in POWER_CURVE_DURATIONS if d in power_curve]
     values = [power_curve[d] for d in labels]
 
     fig.add_trace(go.Scatter(

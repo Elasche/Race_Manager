@@ -96,6 +96,56 @@ def add_training_file(athlete_id: str, filename: str, content: bytes) -> str:
     return str(path)
 
 
+def list_athlete_training_files(athlete_id: str) -> list[str]:
+    """
+    Gibt alle Trainingsdateien eines Athleten zurück, direkt vom Dateisystem gelesen.
+
+    Liest den Athleten-Ordner statt der gespeicherten training_files-Liste, damit
+    auch manuell hineinkopierte Dateien (z.B. entpackte Strava-Bulk-Exports)
+    erkannt werden, ohne über die App hochgeladen worden zu sein.
+    """
+    training_dir = DATA_DIR / "trainings" / athlete_id
+    if not training_dir.exists():
+        return []
+    return sorted(
+        str(p) for p in training_dir.iterdir()
+        if p.is_file() and (p.suffix.lower() in (".csv", ".fit") or p.name.lower().endswith(".gz"))
+    )
+
+
+def list_unassigned_training_files() -> list[str]:
+    """
+    Gibt Trainingsdateien zurück, die direkt in data/trainings/ liegen statt
+    in einem Athleten-Unterordner (z.B. manuell entpackte Strava-Exports).
+    """
+    _ensure_dirs()
+    training_root = DATA_DIR / "trainings"
+    return sorted(
+        p.name for p in training_root.iterdir()
+        if p.is_file() and p.suffix.lower() in (".csv", ".fit", ".gz")
+    )
+
+
+def assign_training_file(athlete_id: str, filename: str) -> str:
+    """
+    Ordnet eine bereits in data/trainings/ liegende Datei einem Athleten zu.
+
+    Verschiebt die Datei in den Athleten-Unterordner und verknüpft sie.
+    """
+    src = DATA_DIR / "trainings" / filename
+    training_dir = DATA_DIR / "trainings" / athlete_id
+    training_dir.mkdir(parents=True, exist_ok=True)
+    dest = training_dir / filename
+    src.replace(dest)
+
+    athletes = load_athletes()
+    for a in athletes:
+        if a.id == athlete_id and str(dest) not in a.training_files:
+            a.training_files.append(str(dest))
+    _save_athletes(athletes)
+    return str(dest)
+
+
 def get_athlete_by_id(athlete_id: str) -> Optional[Athlete]:
     """Gibt einen Athleten anhand seiner ID zurück oder None falls nicht gefunden."""
     return next((a for a in load_athletes() if a.id == athlete_id), None)
