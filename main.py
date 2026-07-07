@@ -267,6 +267,7 @@ def _dialog_add_athlete() -> None:
     with st.form("form_add_athlete"):
         name = st.text_input("Name *")
         birth_year = st.number_input("Geburtsjahr *", min_value=1940, max_value=2010, value=1995)
+        weight_kg = st.number_input("Gewicht (kg)", min_value=0.0, max_value=200.0, value=0.0, step=0.5)
         photo = st.file_uploader("Foto (optional)", type=["jpg", "jpeg", "png"])
         submitted = st.form_submit_button("Anlegen", type="primary")
 
@@ -275,7 +276,7 @@ def _dialog_add_athlete() -> None:
             st.error("Name darf nicht leer sein.")
             return
         photo_bytes = photo.read() if photo else None
-        athlete = create_athlete(name.strip(), int(birth_year), photo_bytes)
+        athlete = create_athlete(name.strip(), int(birth_year), photo_bytes, weight_kg or None)
         _reload_athletes()
         st.session_state.selected_athlete_id = athlete.id
         st.success(f"Athlet '{athlete.name}' wurde angelegt.")
@@ -288,6 +289,9 @@ def _dialog_edit_athlete(athlete: Athlete) -> None:
     with st.form("form_edit_athlete"):
         name = st.text_input("Name", value=athlete.name)
         birth_year = st.number_input("Geburtsjahr", min_value=1940, max_value=2010, value=athlete.birth_year)
+        weight_kg = st.number_input(
+            "Gewicht (kg)", min_value=0.0, max_value=200.0, value=athlete.weight_kg or 0.0, step=0.5
+        )
         photo = st.file_uploader("Foto ersetzen (optional)", type=["jpg", "jpeg", "png"])
         submitted = st.form_submit_button("Speichern", type="primary")
 
@@ -297,6 +301,7 @@ def _dialog_edit_athlete(athlete: Athlete) -> None:
             return
         athlete.name = name.strip()
         athlete.birth_year = int(birth_year)
+        athlete.weight_kg = weight_kg or None
         if photo:
             athlete.photo_b64 = None
             import base64
@@ -526,7 +531,11 @@ with col_right:
         st.markdown('<div class="section-label">Leistungsdaten</div>', unsafe_allow_html=True)
         col_m1, col_m2 = st.columns(2)
         col_m1.metric("Max HF", f"{max_hr} bpm" if max_hr else "–")
-        col_m2.metric("FTP", f"{ftp:.0f} W" if ftp else "–")
+        wkg = ftp / athlete.weight_kg if ftp and athlete.weight_kg else None
+        col_m2.metric(
+            "FTP", f"{ftp:.0f} W" if ftp else "–",
+            delta=f"{wkg:.2f} W/kg" if wkg else None, delta_color="off",
+        )
         if energy_kj:
             st.metric("Energie (Zielzeit)", f"{energy_kj:.0f} kJ")
 
@@ -536,20 +545,25 @@ with col_right:
 
         st.markdown("---")
         st.markdown('<div class="section-label">Trainingsdaten</div>', unsafe_allow_html=True)
+        upload_key = f"training_upload_{st.session_state.get('training_upload_seq', 0)}"
         training_file = st.file_uploader(
             "Trainingsdatei hinzufügen (.csv / .fit / .gpx / .gz)",
             type=["csv", "fit", "gpx", "gz"],
-            key="training_upload",
+            key=upload_key,
             label_visibility="collapsed",
         )
         if training_file is not None:
-            try:
-                add_training_file(athlete.id, training_file.name, training_file.read())
-                _reload_athletes()
-                st.success(f"'{training_file.name}' gespeichert.")
-                st.rerun()
-            except Exception as e:
-                st.error(f"Fehler: {e}")
+            if st.button("Hochladen bestätigen", key="confirm_training_upload", use_container_width=True):
+                try:
+                    add_training_file(athlete.id, training_file.name, training_file.read())
+                    _reload_athletes()
+                    # Uploader-Key wechseln, damit die Auswahl danach geleert wird
+                    # (verhindert, dass dieselbe Datei bei jedem weiteren Rerun erneut hochgeladen wird).
+                    st.session_state.training_upload_seq = st.session_state.get("training_upload_seq", 0) + 1
+                    st.success(f"'{training_file.name}' gespeichert.")
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"Fehler: {e}")
 
         unassigned = list_unassigned_training_files()
         if unassigned:
