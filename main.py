@@ -26,6 +26,7 @@ from modules.athletenverwaltung import (
 from modules.ernaehrungsdaten import (
     BOTTLE_SIZES_ML,
     Bottle,
+    build_feed_zone_recommendation,
     build_selected_products,
     calculate_nutrition_plan,
     check_hydration_capacity,
@@ -43,6 +44,7 @@ from modules.streckenanalys import (
     load_saved_route,
     save_route_file,
     suggest_nutrition_points,
+    time_at_distance,
 )
 from modules.trainingsanalys import aggregate_athlete_data
 from modules.visualisierungen import (
@@ -99,6 +101,7 @@ def _init_state() -> None:
         "bottle_content_1": "Wasser",
         "gel_brand_choice": "Keine Gels",
         "gel_product_choice": "",
+        "num_feed_zones": 0,
         "show_add_athlete": False,
         "show_edit_athlete": False,
         "athletes_cache": None,
@@ -538,8 +541,76 @@ with col_left:
             f"💧 Deine Flaschen fassen zusammen {hydration_issue['total_ml']:.0f} ml – das ergibt nur "
             f"{hydration_issue['ml_per_hour']:.0f} ml/h über die Zielzeit ({st.session_state.target_time_h:.2f}h), "
             f"empfohlen sind mind. {hydration_issue['min_ml_per_hour']:.0f} ml/h. Größere/mehr Flaschen wählen "
-            "oder eine Verpflegungsstation einplanen (folgt als nächstes)."
+            "oder unten eine Feedzone zum Nachfüllen einplanen."
         )
+
+    st.markdown('<div class="section-label">Feedzonen</div>', unsafe_allow_html=True)
+    with st.expander("Feedzonen einstellen"):
+        minus_col, count_col, plus_col = st.columns([1, 2, 1])
+        with minus_col:
+            minus_clicked = st.button(
+                "−", key="feedzone_minus", use_container_width=True,
+                disabled=st.session_state.num_feed_zones <= 0,
+            )
+        with plus_col:
+            plus_clicked = st.button(
+                "＋", key="feedzone_plus", use_container_width=True,
+                disabled=st.session_state.num_feed_zones >= 5,
+            )
+        if minus_clicked:
+            st.session_state.num_feed_zones -= 1
+        if plus_clicked:
+            st.session_state.num_feed_zones += 1
+        with count_col:
+            st.markdown(
+                f"<div style='text-align:center; padding-top:8px;'>"
+                f"{st.session_state.num_feed_zones} Feedzone(n)</div>",
+                unsafe_allow_html=True,
+            )
+
+        if st.session_state.num_feed_zones > 0:
+            if route_df is None or route_df.empty:
+                st.caption("Bitte zuerst eine Strecke auswählen, um Feedzonen zu platzieren.")
+            else:
+                total_km = calculate_route_metrics(route_df)["total_distance_km"]
+                route_with_time_fz = estimate_time_at_points(route_df, st.session_state.target_time_h)
+
+                zone_kms = []
+                for i in range(st.session_state.num_feed_zones):
+                    zone_key = f"feedzone_km_{i}"
+                    if zone_key not in st.session_state:
+                        st.session_state[zone_key] = round(
+                            total_km * (i + 1) / (st.session_state.num_feed_zones + 1), 1
+                        )
+                    st.slider(
+                        f"Feedzone {i + 1} – Position (km)",
+                        min_value=0.0, max_value=float(total_km),
+                        value=float(min(st.session_state[zone_key], total_km)),
+                        step=0.5, key=zone_key,
+                    )
+                    zone_kms.append(st.session_state[zone_key])
+
+                sorted_kms = sorted(zone_kms)
+                boundaries_km = sorted_kms[1:] + [total_km]
+                bottles_now = _current_bottles()
+
+                st.markdown("---")
+                for km, next_km in zip(sorted_kms, boundaries_km):
+                    start_min = time_at_distance(route_with_time_fz, km) * 60.0
+                    end_min = (
+                        time_at_distance(route_with_time_fz, next_km) * 60.0
+                        if next_km < total_km
+                        else st.session_state.target_time_h * 60.0
+                    )
+                    rec = build_feed_zone_recommendation(nutrition_events, start_min, end_min, bottles_now)
+                    st.markdown(f"**Feedzone bei km {km:.1f}**")
+                    bottle_txt = ", ".join(rec["bottles_to_refill"]) or "–"
+                    st.caption(f"🍼 Flaschen auffüllen: {bottle_txt}")
+                    if rec["gel_counts"]:
+                        gel_txt = ", ".join(f"{n}× {name}" for name, n in rec["gel_counts"].items())
+                        st.caption(f"🍬 Gele übergeben: {gel_txt}")
+                    else:
+                        st.caption("🍬 Keine weiteren Gele für diesen Abschnitt geplant.")
 
     if nutrition_points or (route_df is not None):
         pdf_bytes = _export_pdf(athlete, route_df, nutrition_points)

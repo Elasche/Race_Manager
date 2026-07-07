@@ -280,6 +280,18 @@ def estimate_time_at_points(route_df: pd.DataFrame, target_time_h: float) -> pd.
     return df
 
 
+def time_at_distance(route_df: pd.DataFrame, distance_km: float) -> float:
+    """
+    Gibt die geschätzte Renndauer (h) an einem gegebenen Streckenkilometer zurück.
+
+    Erwartet ein route_df mit "estimated_time_h"-Spalte (siehe estimate_time_at_points).
+    """
+    if route_df.empty or "estimated_time_h" not in route_df.columns:
+        return 0.0
+    idx = int(np.argmin(np.abs(route_df["distance_km"].values - distance_km)))
+    return float(route_df.iloc[idx]["estimated_time_h"])
+
+
 def calculate_target_time(route_df: pd.DataFrame, ftp: Optional[float] = None) -> float:
     """
     Schlägt eine Zielzeit für die Strecke vor.

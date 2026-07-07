@@ -178,6 +178,34 @@ def check_hydration_capacity(
     }
 
 
+def build_feed_zone_recommendation(
+    events: list[NutritionEvent],
+    start_time_min: float,
+    end_time_min: float,
+    bottles: list[Bottle],
+) -> dict:
+    """
+    Fasst zusammen, was einem Athleten an einer Feedzone übergeben werden sollte.
+
+    Nutzt die bereits geplanten Gel-Einnahmezeitpunkte: alle Gel-Events, deren
+    Zeit in das Zeitfenster bis zur nächsten Feedzone (oder dem Ziel) fällt,
+    werden als "hier übergeben" empfohlen. Zusätzlich wird an das Auffüllen
+    aller mitgeführten Flaschen erinnert.
+    """
+    gels_in_segment = [
+        e for e in events
+        if e.product.type == "gel" and start_time_min <= e.time_min < end_time_min
+    ]
+    gel_counts: dict[str, int] = {}
+    for e in gels_in_segment:
+        gel_counts[e.product.name] = gel_counts.get(e.product.name, 0) + 1
+    return {
+        "gel_counts": gel_counts,
+        "total_gels": len(gels_in_segment),
+        "bottles_to_refill": [f"{b.size_ml}ml {b.brand or 'Wasser'}" for b in bottles],
+    }
+
+
 def calculate_nutrition_interval(carbs_per_hour: int, product: NutritionProduct) -> float:
     """
     Berechnet das Verpflegungsintervall in Minuten für ein gegebenes Produkt.
