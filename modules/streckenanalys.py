@@ -284,7 +284,7 @@ def calculate_target_time(route_df: pd.DataFrame, ftp: Optional[float] = None) -
     """
     Schlägt eine Zielzeit für die Strecke vor.
 
-    Basisgeschwindigkeit von 15 km/h wird durch Geländeneigung und
+    Basisgeschwindigkeit von 25 km/h wird durch Geländeneigung und
     optional durch das FTP des Athleten (Referenz 250W) angepasst.
     """
     metrics = calculate_route_metrics(route_df)
@@ -295,7 +295,7 @@ def calculate_target_time(route_df: pd.DataFrame, ftp: Optional[float] = None) -
         return 2.0
 
     gradient_factor = gain_m / (total_km * 10.0)
-    adjusted_speed = 15.0 * max(0.3, 1.0 - gradient_factor * 0.18)
+    adjusted_speed = 25.0 * max(0.3, 1.0 - gradient_factor * 0.10)
 
     base_time = total_km / adjusted_speed
 
@@ -343,6 +343,7 @@ def suggest_nutrition_points(
             "type": event.product.type,
             "product_name": event.product.name,
             "carbs_g": event.product.carbs_g,
+            "bottle_index": event.product.bottle_index,
             "cumulative_carbs_g": event.cumulative_carbs_g,
             "lat": float(row["lat"]),
             "lon": float(row["lon"]),

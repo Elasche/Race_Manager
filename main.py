@@ -24,7 +24,13 @@ from modules.athletenverwaltung import (
     update_athlete,
 )
 from modules.ernaehrungsdaten import (
+    BOTTLE_SIZES_ML,
+    Bottle,
+    build_selected_products,
     calculate_nutrition_plan,
+    check_hydration_capacity,
+    get_brands_by_type,
+    get_products_by_brand,
     load_products,
 )
 from modules.streckenanalys import (
@@ -86,7 +92,13 @@ def _init_state() -> None:
         "route_filename": "",
         "target_time_h": 2.0,
         "carbs_per_hour": 60,
-        "nutrition_type": "gel+drink",
+        "num_bottles": 1,
+        "bottle_size_0": 750,
+        "bottle_content_0": "Wasser",
+        "bottle_size_1": 750,
+        "bottle_content_1": "Wasser",
+        "gel_brand_choice": "Keine Gels",
+        "gel_product_choice": "",
         "show_add_athlete": False,
         "show_edit_athlete": False,
         "athletes_cache": None,
@@ -143,18 +155,43 @@ def _get_athlete_stats(athlete: Athlete) -> dict:
     return _compute_athlete_stats(athlete.id, fingerprint)
 
 
+def _current_bottles() -> list[Bottle]:
+    """Liest die konfigurierten Flaschen (Größe + Hersteller) aus dem Session-State."""
+    bottles = []
+    for i in range(st.session_state.num_bottles):
+        content = st.session_state.get(f"bottle_content_{i}", "Wasser")
+        bottles.append(Bottle(
+            size_ml=st.session_state.get(f"bottle_size_{i}", 750),
+            brand="" if content == "Wasser" else content,
+        ))
+    return bottles
+
+
+def _current_gel_brand() -> str:
+    """Liest den gewählten Gel-Hersteller aus dem Session-State ("" = keine Gels)."""
+    choice = st.session_state.get("gel_brand_choice", "Keine Gels")
+    return "" if choice == "Keine Gels" else choice
+
+
+def _current_gel_product_name() -> str:
+    """Liest die gewählte Gel-Produktlinie aus dem Session-State."""
+    return st.session_state.get("gel_product_choice", "")
+
+
 def _build_nutrition_plan(route_df: Optional[pd.DataFrame] = None) -> tuple[list, list]:
     """
     Berechnet den Verpflegungsplan und ordnet ihn der Strecke zu.
 
     Gibt (nutrition_events, nutrition_points) zurück.
     """
-    products = load_products()
+    catalog = load_products()
+    selected_products = build_selected_products(
+        catalog, _current_bottles(), _current_gel_brand(), _current_gel_product_name()
+    )
     events = calculate_nutrition_plan(
         target_time_h=st.session_state.target_time_h,
         carbs_per_hour=st.session_state.carbs_per_hour,
-        products=products,
-        nutrition_type=st.session_state.nutrition_type,
+        products=selected_products,
     )
     points: list[dict] = []
     if route_df is not None and not route_df.empty:
@@ -268,6 +305,9 @@ def _dialog_add_athlete() -> None:
         name = st.text_input("Name *")
         birth_year = st.number_input("Geburtsjahr *", min_value=1940, max_value=2010, value=1995)
         weight_kg = st.number_input("Gewicht (kg)", min_value=0.0, max_value=200.0, value=0.0, step=0.5)
+        default_carbs = st.number_input(
+            "Standard Kohlenhydrate/Stunde (g)", min_value=0, max_value=200, value=100, step=5
+        )
         photo = st.file_uploader("Foto (optional)", type=["jpg", "jpeg", "png"])
         submitted = st.form_submit_button("Anlegen", type="primary")
 
@@ -276,7 +316,7 @@ def _dialog_add_athlete() -> None:
             st.error("Name darf nicht leer sein.")
             return
         photo_bytes = photo.read() if photo else None
-        athlete = create_athlete(name.strip(), int(birth_year), photo_bytes, weight_kg or None)
+        athlete = create_athlete(name.strip(), int(birth_year), photo_bytes, weight_kg or None, int(default_carbs))
         _reload_athletes()
         st.session_state.selected_athlete_id = athlete.id
         st.success(f"Athlet '{athlete.name}' wurde angelegt.")
@@ -292,6 +332,10 @@ def _dialog_edit_athlete(athlete: Athlete) -> None:
         weight_kg = st.number_input(
             "Gewicht (kg)", min_value=0.0, max_value=200.0, value=athlete.weight_kg or 0.0, step=0.5
         )
+        default_carbs = st.number_input(
+            "Standard Kohlenhydrate/Stunde (g)", min_value=0, max_value=200,
+            value=athlete.default_carbs_per_hour if athlete.default_carbs_per_hour is not None else 100, step=5,
+        )
         photo = st.file_uploader("Foto ersetzen (optional)", type=["jpg", "jpeg", "png"])
         submitted = st.form_submit_button("Speichern", type="primary")
 
@@ -302,6 +346,7 @@ def _dialog_edit_athlete(athlete: Athlete) -> None:
         athlete.name = name.strip()
         athlete.birth_year = int(birth_year)
         athlete.weight_kg = weight_kg or None
+        athlete.default_carbs_per_hour = int(default_carbs)
         if photo:
             athlete.photo_b64 = None
             import base64
@@ -329,22 +374,87 @@ with col_left:
         next((i for i, a in enumerate(athletes) if a.id == st.session_state.selected_athlete_id), 0) if athletes else 0
     )
 
-    if athletes:
-        chosen_name = st.selectbox("Athlet auswählen", athlete_names, index=selected_idx, label_visibility="collapsed")
-        chosen = next(a for a in athletes if a.name == chosen_name)
-        st.session_state.selected_athlete_id = chosen.id
-    else:
-        st.info("Noch kein Athlet vorhanden.")
+    select_col, add_col = st.columns([5, 1])
+    with select_col:
+        if athletes:
+            chosen_name = st.selectbox(
+                "Athlet auswählen", athlete_names, index=selected_idx,
+                key="athlete_select_name", label_visibility="collapsed",
+            )
+            chosen = next(a for a in athletes if a.name == chosen_name)
+            if chosen.id != st.session_state.selected_athlete_id:
+                st.session_state.carbs_per_hour = chosen.default_carbs_per_hour or 100
+            st.session_state.selected_athlete_id = chosen.id
+        else:
+            st.info("Noch kein Athlet vorhanden.")
+    with add_col:
+        if st.button("＋", help="Neuen Athleten anlegen", use_container_width=True):
+            _dialog_add_athlete()
 
     st.markdown('<div class="section-label">Verpflegung</div>', unsafe_allow_html=True)
-    nt_map = {"Gel + Drink": "gel+drink", "Nur Gel": "gel", "Nur Drink": "drink", "Alle": "alle"}
-    nt_label = st.selectbox("Typ", list(nt_map.keys()), label_visibility="collapsed")
-    st.session_state.nutrition_type = nt_map[nt_label]
+
+    nutrition_catalog = load_products()
+    drink_brand_options = get_brands_by_type(nutrition_catalog, "drink")
+    gel_brand_options = get_brands_by_type(nutrition_catalog, "gel")
+
+    with st.expander("Flaschen & Produkte einstellen"):
+        st.radio(
+            "Anzahl Flaschen am Rad", [1, 2],
+            index=[1, 2].index(st.session_state.num_bottles),
+            key="num_bottles", horizontal=True,
+        )
+        for i in range(st.session_state.num_bottles):
+            st.markdown(f"**Flasche {i + 1}**")
+            size_col, content_col = st.columns(2)
+            with size_col:
+                size_val = st.session_state.get(f"bottle_size_{i}", 750)
+                st.selectbox(
+                    "Größe", BOTTLE_SIZES_ML,
+                    index=BOTTLE_SIZES_ML.index(size_val) if size_val in BOTTLE_SIZES_ML else 1,
+                    format_func=lambda ml: f"{ml} ml",
+                    key=f"bottle_size_{i}",
+                )
+            with content_col:
+                content_options = ["Wasser"] + drink_brand_options
+                content_val = st.session_state.get(f"bottle_content_{i}", "Wasser")
+                st.selectbox(
+                    "Inhalt", content_options,
+                    index=content_options.index(content_val) if content_val in content_options else 0,
+                    key=f"bottle_content_{i}",
+                )
+        st.markdown("**Gels**")
+        gel_options = ["Keine Gels"] + gel_brand_options
+        gel_val = st.session_state.get("gel_brand_choice", "Keine Gels")
+        st.selectbox(
+            "Gel-Hersteller", gel_options,
+            index=gel_options.index(gel_val) if gel_val in gel_options else 0,
+            key="gel_brand_choice",
+        )
+
+        chosen_gel_brand = _current_gel_brand()
+        if chosen_gel_brand:
+            gel_product_options = [
+                p.name for p in get_products_by_brand(nutrition_catalog, "gel", chosen_gel_brand)
+            ]
+            product_val = st.session_state.get("gel_product_choice", "")
+            st.selectbox(
+                "Produktlinie", gel_product_options,
+                index=gel_product_options.index(product_val) if product_val in gel_product_options else 0,
+                key="gel_product_choice",
+            )
+        else:
+            st.session_state.gel_product_choice = ""
+
+    bottle_summary = " · ".join(
+        f"🚴 F{i + 1}: {b.size_ml}ml {b.brand or 'Wasser'}" for i, b in enumerate(_current_bottles())
+    )
+    gel_summary = _current_gel_brand() or "keine"
+    st.caption(f"{bottle_summary} · 🍮 Gel: {gel_summary}")
 
     st.session_state.carbs_per_hour = st.slider(
         "Kohlenhydrate / Stunde (g)",
-        min_value=30,
-        max_value=120,
+        min_value=0,
+        max_value=200,
         value=st.session_state.carbs_per_hour,
         step=5,
     )
@@ -422,6 +532,15 @@ with col_left:
     athlete = _selected_athlete()
     nutrition_events, nutrition_points = _build_nutrition_plan(route_df)
 
+    hydration_issue = check_hydration_capacity(_current_bottles(), st.session_state.target_time_h)
+    if hydration_issue:
+        st.warning(
+            f"💧 Deine Flaschen fassen zusammen {hydration_issue['total_ml']:.0f} ml – das ergibt nur "
+            f"{hydration_issue['ml_per_hour']:.0f} ml/h über die Zielzeit ({st.session_state.target_time_h:.2f}h), "
+            f"empfohlen sind mind. {hydration_issue['min_ml_per_hour']:.0f} ml/h. Größere/mehr Flaschen wählen "
+            "oder eine Verpflegungsstation einplanen (folgt als nächstes)."
+        )
+
     if nutrition_points or (route_df is not None):
         pdf_bytes = _export_pdf(athlete, route_df, nutrition_points)
         st.download_button(
@@ -435,31 +554,6 @@ with col_left:
 
 # ── MITTLERE SPALTE ───────────────────────────────────────────────────────────
 with col_mid:
-    athletes = _get_athletes()
-
-    head_col, add_col = st.columns([5, 1])
-    with head_col:
-        st.markdown('<div class="section-label">Athleten</div>', unsafe_allow_html=True)
-    with add_col:
-        if st.button("＋", help="Neuen Athleten anlegen", use_container_width=True):
-            _dialog_add_athlete()
-
-    if athletes:
-        btn_cols = st.columns(min(len(athletes), 4))
-        for i, a in enumerate(athletes):
-            with btn_cols[i % len(btn_cols)]:
-                is_sel = a.id == st.session_state.selected_athlete_id
-                label = f"**{a.name}**" if is_sel else a.name
-                if st.button(
-                    label, key=f"sel_{a.id}", use_container_width=True, type="primary" if is_sel else "secondary"
-                ):
-                    st.session_state.selected_athlete_id = a.id
-                    st.rerun()
-    else:
-        st.caption("Noch keine Athleten. Klicke ＋ um einen anzulegen.")
-
-    st.markdown("---")
-
     route_df = st.session_state.route_df
     if route_df is not None and not route_df.empty:
         route_with_time = estimate_time_at_points(route_df, st.session_state.target_time_h)
@@ -495,6 +589,7 @@ with col_mid:
                 rows.append(
                     {
                         "Time": f"{h:02d}:{m:02d}",
+                        "Flasche": f"F{e.product.bottle_index + 1}" if e.product.bottle_index is not None else "–",
                         "Nutrition": e.product.name,
                         "KH (g)": int(e.product.carbs_g),
                         "KH gesamt (g)": int(e.cumulative_carbs_g),

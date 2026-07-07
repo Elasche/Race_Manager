@@ -15,15 +15,46 @@ GEL_COLOR = "#111827"
 DRINK_COLOR = "#16a34a"
 FOOD_COLOR = "#f59e0b"
 CLIMB_COLOR = "#ef4444"
+BOTTLE_COLORS = ["#2563EB", "#db2777"]  # Flasche 1, Flasche 2
 
 
-def _zoom_from_extent(lat_range: float, lon_range: float) -> int:
-    """Berechnet einen geeigneten Zoom-Level für die gegebene geografische Ausdehnung."""
-    max_range = max(lat_range, lon_range)
-    if max_range == 0:
-        return 13
-    zoom = int(round(8.5 - math.log2(max_range * 40.0 + 0.001)))
-    return max(6, min(15, zoom))
+def _drink_color(bottle_index: Optional[int]) -> str:
+    """Gibt die Flaschen-Farbe für ein Drink-Event zurück (Fallback: generisches Grün)."""
+    if bottle_index is None:
+        return DRINK_COLOR
+    return BOTTLE_COLORS[bottle_index % len(BOTTLE_COLORS)]
+
+
+def _zoom_to_fit_bounds(
+    lat_min: float, lat_max: float, lon_min: float, lon_max: float,
+    map_px: float = 700.0, fill_fraction: float = 0.9,
+) -> float:
+    """
+    Berechnet den Zoom-Level, bei dem die gesamte Strecke mit ca. 5-10% Rand
+    ins (quadratische) Kartenfenster passt.
+
+    Nutzt die Web-Mercator-Fit-Bounds-Formel (wie bei Google/Mapbox
+    getBoundsZoomLevel): Breiten- und Längengrad-Ausdehnung werden getrennt
+    in einen Anteil der Weltkarte umgerechnet, der jeweils benötigte Zoom
+    berechnet und das Minimum (die restriktivere Achse) verwendet.
+    """
+    if lat_max <= lat_min and lon_max <= lon_min:
+        return 14.0
+
+    def lat_rad(lat: float) -> float:
+        s = max(min(math.sin(math.radians(lat)), 0.9999), -0.9999)
+        return math.log((1 + s) / (1 - s)) / 2
+
+    lat_fraction = (lat_rad(lat_max) - lat_rad(lat_min)) / math.pi
+    lon_fraction = (lon_max - lon_min) / 360.0
+
+    def zoom_for(fraction: float) -> float:
+        if fraction <= 0:
+            return 20.0
+        return math.log2((map_px / 256.0) * fill_fraction / fraction)
+
+    zoom = min(zoom_for(lat_fraction), zoom_for(lon_fraction))
+    return max(2.0, min(20.0, zoom))
 
 
 def create_route_map(
@@ -60,34 +91,44 @@ def create_route_map(
         hovertemplate="%{hovertext}<extra></extra>",
     ))
 
+    def _add_nutrition_trace(group: list[dict], color: str, label: str) -> None:
+        fig.add_trace(go.Scattermapbox(
+            lat=[p["lat"] for p in group],
+            lon=[p["lon"] for p in group],
+            mode="markers+text",
+            marker=dict(size=14, color=color),
+            text=[p["label"] for p in group],
+            textposition="top right",
+            textfont=dict(size=12, color=color),
+            name=label,
+            hovertemplate=(
+                "<b>%{text}</b><br>"
+                + "<br>".join(
+                    f"{p['product_name']}<br>{int(p['time_min'])}min · {p['carbs_g']}g KH"
+                    for p in group
+                )
+                + "<extra></extra>"
+            ),
+        ))
+
     if nutrition_points:
-        type_config = {
-            "gel": (GEL_COLOR, "Gel"),
-            "drink": (DRINK_COLOR, "Drink"),
-            "food": (FOOD_COLOR, "Riegel"),
-        }
-        for ptype, (color, label) in type_config.items():
-            group = [p for p in nutrition_points if p.get("type") == ptype]
-            if not group:
-                continue
-            fig.add_trace(go.Scattermapbox(
-                lat=[p["lat"] for p in group],
-                lon=[p["lon"] for p in group],
-                mode="markers+text",
-                marker=dict(size=14, color=color),
-                text=[p["label"] for p in group],
-                textposition="top right",
-                textfont=dict(size=12, color=color),
-                name=label,
-                hovertemplate=(
-                    "<b>%{text}</b><br>"
-                    + "<br>".join(
-                        f"{p['product_name']}<br>{int(p['time_min'])}min · {p['carbs_g']}g KH"
-                        for p in group
-                    )
-                    + "<extra></extra>"
-                ),
-            ))
+        gels = [p for p in nutrition_points if p.get("type") == "gel"]
+        foods = [p for p in nutrition_points if p.get("type") == "food"]
+        drinks = [p for p in nutrition_points if p.get("type") == "drink"]
+
+        if gels:
+            _add_nutrition_trace(gels, GEL_COLOR, "Gel")
+        if foods:
+            _add_nutrition_trace(foods, FOOD_COLOR, "Riegel")
+
+        bottle_indices = sorted({p["bottle_index"] for p in drinks if p.get("bottle_index") is not None})
+        for bi in bottle_indices:
+            group = [p for p in drinks if p.get("bottle_index") == bi]
+            _add_nutrition_trace(group, _drink_color(bi), f"Flasche {bi + 1}")
+
+        unassigned_drinks = [p for p in drinks if p.get("bottle_index") is None]
+        if unassigned_drinks:
+            _add_nutrition_trace(unassigned_drinks, DRINK_COLOR, "Drink")
 
     if key_features:
         climbs = [f for f in key_features if f.get("type") == "climb"]
@@ -115,17 +156,16 @@ def create_route_map(
                 name="Gipfel",
             ))
 
-    center_lat = float(route_df["lat"].mean())
-    center_lon = float(route_df["lon"].mean())
-    zoom = _zoom_from_extent(
-        float(route_df["lat"].max() - route_df["lat"].min()),
-        float(route_df["lon"].max() - route_df["lon"].min()),
-    )
+    lat_min, lat_max = float(route_df["lat"].min()), float(route_df["lat"].max())
+    lon_min, lon_max = float(route_df["lon"].min()), float(route_df["lon"].max())
+    center_lat = (lat_min + lat_max) / 2
+    center_lon = (lon_min + lon_max) / 2
+    zoom = _zoom_to_fit_bounds(lat_min, lat_max, lon_min, lon_max)
 
     fig.update_layout(
         mapbox=dict(style="open-street-map", center=dict(lat=center_lat, lon=center_lon), zoom=zoom),
         margin=dict(l=0, r=0, t=0, b=0),
-        height=380,
+        height=700,
         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1, font=dict(size=11)),
     )
     return fig
@@ -158,7 +198,12 @@ def create_elevation_profile(
 
     if nutrition_points:
         for p in nutrition_points:
-            color = DRINK_COLOR if p.get("type") == "drink" else (FOOD_COLOR if p.get("type") == "food" else GEL_COLOR)
+            if p.get("type") == "drink":
+                color = _drink_color(p.get("bottle_index"))
+            elif p.get("type") == "food":
+                color = FOOD_COLOR
+            else:
+                color = GEL_COLOR
             x_pos = p.get("distance_km", 0)
             fig.add_vline(
                 x=x_pos,
@@ -247,14 +292,16 @@ def create_nutrition_table(nutrition_points: list[dict]) -> pd.DataFrame:
     Enthält geplante Zeit (HH:MM), Produkt, Kohlenhydrate und Gesamtsumme.
     """
     if not nutrition_points:
-        return pd.DataFrame(columns=["Time", "Nutrition", "KH (g)", "KH gesamt (g)"])
+        return pd.DataFrame(columns=["Time", "Flasche", "Nutrition", "KH (g)", "KH gesamt (g)"])
 
     rows = []
     for p in nutrition_points:
         total_min = int(p["time_min"])
         h, m = divmod(total_min, 60)
+        bottle_index = p.get("bottle_index")
         rows.append({
             "Time": f"{h:02d}:{m:02d}",
+            "Flasche": f"F{bottle_index + 1}" if bottle_index is not None else "–",
             "Nutrition": p["product_name"],
             "KH (g)": int(p["carbs_g"]),
             "KH gesamt (g)": int(p["cumulative_carbs_g"]),

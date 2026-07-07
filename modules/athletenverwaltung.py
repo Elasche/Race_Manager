@@ -23,6 +23,7 @@ class Athlete:
     id: str = field(default_factory=lambda: str(uuid.uuid4()))
     photo_b64: Optional[str] = None
     weight_kg: Optional[float] = None
+    default_carbs_per_hour: Optional[int] = None
     training_files: list[str] = field(default_factory=list)
 
     @property
@@ -62,11 +63,21 @@ def _save_athletes(athletes: list[Athlete]) -> None:
 
 
 def create_athlete(
-    name: str, birth_year: int, photo_bytes: Optional[bytes] = None, weight_kg: Optional[float] = None
+    name: str,
+    birth_year: int,
+    photo_bytes: Optional[bytes] = None,
+    weight_kg: Optional[float] = None,
+    default_carbs_per_hour: Optional[int] = None,
 ) -> Athlete:
     """Legt einen neuen Athleten an und persistiert ihn."""
     photo_b64 = base64.b64encode(photo_bytes).decode("utf-8") if photo_bytes else None
-    athlete = Athlete(name=name, birth_year=birth_year, photo_b64=photo_b64, weight_kg=weight_kg)
+    athlete = Athlete(
+        name=name,
+        birth_year=birth_year,
+        photo_b64=photo_b64,
+        weight_kg=weight_kg,
+        default_carbs_per_hour=default_carbs_per_hour,
+    )
     athletes = load_athletes()
     athletes.append(athlete)
     _save_athletes(athletes)
