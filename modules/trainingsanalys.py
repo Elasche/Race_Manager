@@ -56,10 +56,10 @@ def _normalize_columns(df: pd.DataFrame) -> pd.DataFrame:
 
 def load_training_data(filepath: str | Path) -> pd.DataFrame:
     """
-    Lädt eine Trainingsdatei (.csv, .fit oder gzip-komprimiert .csv.gz/.fit.gz)
+    Lädt eine Trainingsdatei (.csv, .fit oder .gpx, auch gzip-komprimiert)
     und normalisiert die Spalten.
 
-    Strava-Exports liefern Aktivitäten oft als gzip-komprimierte .fit.gz-Dateien;
+    Strava-Exports liefern Aktivitäten oft gzip-komprimiert (.fit.gz, .gpx.gz);
     diese werden transparent entpackt. Erwartet mindestens eine Zeitspalte sowie
     Leistungs- oder Herzfrequenzdaten. Unterstützte Spalten: timestamp, power,
     heart_rate, cadence, speed, elevation, latitude, longitude.
@@ -71,10 +71,15 @@ def load_training_data(filepath: str | Path) -> pd.DataFrame:
         inner_name = name[:-3]
         if inner_name.endswith(".fit"):
             return load_training_data_fit(io.BytesIO(content))
+        if inner_name.endswith(".gpx"):
+            return load_training_data_gpx(content)
         return _load_training_csv(io.BytesIO(content))
 
     if name.endswith(".fit"):
         return load_training_data_fit(filepath)
+
+    if name.endswith(".gpx"):
+        return load_training_data_gpx(Path(filepath).read_bytes())
 
     return _load_training_csv(filepath)
 
@@ -109,22 +114,24 @@ def load_training_data_fit(source) -> pd.DataFrame:
     rows: list[dict] = []
     for record in fitfile.get_messages("record"):
         values = {d.name: d.value for d in record}
-        rows.append({
-            "timestamp": values.get("timestamp"),
-            "power": values.get("power"),
-            "heart_rate": values.get("heart_rate"),
-            "cadence": values.get("cadence"),
-            "speed": values.get("enhanced_speed", values.get("speed")),
-            "elevation": values.get("enhanced_altitude", values.get("altitude")),
-            "latitude": values.get("position_lat"),
-            "longitude": values.get("position_long"),
-        })
+        rows.append(
+            {
+                "timestamp": values.get("timestamp"),
+                "power": values.get("power"),
+                "heart_rate": values.get("heart_rate"),
+                "cadence": values.get("cadence"),
+                "speed": values.get("enhanced_speed", values.get("speed")),
+                "elevation": values.get("enhanced_altitude", values.get("altitude")),
+                "latitude": values.get("position_lat"),
+                "longitude": values.get("position_long"),
+            }
+        )
 
     df = pd.DataFrame(rows)
     if df.empty:
         raise ValueError("FIT-Datei enthält keine Aufzeichnungsdaten (record messages).")
 
-    semicircle_to_deg = 180.0 / (2 ** 31)
+    semicircle_to_deg = 180.0 / (2**31)
     for col in ("latitude", "longitude"):
         if col in df.columns:
             df[col] = pd.to_numeric(df[col], errors="coerce") * semicircle_to_deg
@@ -140,13 +147,67 @@ def load_training_data_fit(source) -> pd.DataFrame:
         if col in df.columns:
             df[col] = pd.to_numeric(df[col], errors="coerce")
 
-    # Sensoren wie Power oder Cadence sind nicht auf jedem Gerät vorhanden;
-    # eine durchgehend leere Spalte soll wie eine fehlende Spalte behandelt werden
-    # (sonst liefert z.B. calculate_ftp fälschlich 0 statt "keine Daten").
-    empty_cols = [c for c in df.columns if df[c].isna().all()]
-    df = df.drop(columns=empty_cols)
+    return _drop_empty_sensor_columns(df)
 
-    return df
+
+def load_training_data_gpx(content: bytes) -> pd.DataFrame:
+    """
+    Lädt eine Trainings-GPX-Datei und normalisiert sie auf dieselben Spalten
+    wie CSV-/FIT-Importe.
+
+    Strava-Exports betten Power/Herzfrequenz/Kadenz als GPX-Erweiterungen ein
+    (das nicht-namensraum-gebundene <power>-Element sowie das Garmin
+    TrackPointExtension-Schema mit <gpxtpx:hr>/<gpxtpx:cad>). gpxpy liefert
+    diese als rohe XML-Elemente zurück, die hier namensraum-unabhängig anhand
+    des lokalen Tag-Namens ausgelesen werden.
+    """
+    import gpxpy
+
+    gpx = gpxpy.parse(content.decode("utf-8", errors="replace"))
+    rows: list[dict] = []
+    for track in gpx.tracks:
+        for segment in track.segments:
+            for pt in segment.points:
+                ext_values: dict[str, str] = {}
+                for ext in pt.extensions:
+                    for el in ext.iter():
+                        local_tag = el.tag.split("}")[-1]
+                        if el.text and el.text.strip():
+                            ext_values.setdefault(local_tag, el.text.strip())
+
+                rows.append({
+                    "timestamp": pt.time,
+                    "power": ext_values.get("power"),
+                    "heart_rate": ext_values.get("hr"),
+                    "cadence": ext_values.get("cad"),
+                    "elevation": pt.elevation,
+                    "latitude": pt.latitude,
+                    "longitude": pt.longitude,
+                })
+
+    df = pd.DataFrame(rows)
+    if df.empty:
+        raise ValueError("GPX-Datei enthält keine verwertbaren Trackpunkte.")
+
+    if "timestamp" in df.columns:
+        df["timestamp"] = pd.to_datetime(df["timestamp"], errors="coerce", utc=True)
+        df = df.dropna(subset=["timestamp"]).sort_values("timestamp").reset_index(drop=True)
+
+    for col in ["power", "heart_rate", "cadence", "elevation"]:
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors="coerce")
+
+    return _drop_empty_sensor_columns(df)
+
+
+def _drop_empty_sensor_columns(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Entfernt durchgehend leere Sensor-Spalten (z.B. Power auf einem Gerät ohne
+    Leistungsmesser), damit sie wie eine fehlende Spalte behandelt werden statt
+    fälschlich als lauter Nullen in die Auswertung einzufließen.
+    """
+    empty_cols = [c for c in df.columns if df[c].isna().all()]
+    return df.drop(columns=empty_cols)
 
 
 def _get_power_array(df: pd.DataFrame) -> np.ndarray:
@@ -164,13 +225,7 @@ def _get_power_array(df: pd.DataFrame) -> np.ndarray:
         return np.array([])
 
     if "timestamp" in df.columns:
-        resampled = (
-            df.set_index("timestamp")["power"]
-            .resample("1s")
-            .mean()
-            .fillna(0)
-            .values
-        )
+        resampled = df.set_index("timestamp")["power"].resample("1s").mean().fillna(0).values
         return resampled.astype(float)
 
     return df["power"].fillna(0).values.astype(float)
@@ -254,8 +309,6 @@ def aggregate_athlete_data(filepaths: list[str]) -> dict:
     best_ftp: Optional[float] = None
     if "20min" in combined_curve:
         best_ftp = round(combined_curve["20min"] * 0.95, 1)
-    elif "10min" in combined_curve:
-        best_ftp = round(combined_curve["10min"] * 0.90, 1)
 
     return {
         "ftp": best_ftp,

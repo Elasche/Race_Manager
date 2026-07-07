@@ -16,9 +16,11 @@ from modules.athletenverwaltung import (
     create_athlete,
     decode_photo,
     delete_athlete,
+    delete_training_file,
     list_athlete_training_files,
     list_unassigned_training_files,
     load_athletes,
+    rename_training_file,
     update_athlete,
 )
 from modules.ernaehrungsdaten import (
@@ -535,8 +537,8 @@ with col_right:
         st.markdown("---")
         st.markdown('<div class="section-label">Trainingsdaten</div>', unsafe_allow_html=True)
         training_file = st.file_uploader(
-            "Trainingsdatei hinzufügen (.csv / .fit / .fit.gz)",
-            type=["csv", "fit", "gz"],
+            "Trainingsdatei hinzufügen (.csv / .fit / .gpx / .gz)",
+            type=["csv", "fit", "gpx", "gz"],
             key="training_upload",
             label_visibility="collapsed",
         )
@@ -562,9 +564,30 @@ with col_right:
                 st.success(f"{len(to_assign)} Datei(en) zugeordnet.")
                 st.rerun()
 
-        existing = [Path(fp).name for fp in list_athlete_training_files(athlete.id)]
-        if existing:
-            st.caption(f"Dateien: {', '.join(existing)}")
+        existing_files = [Path(fp).name for fp in list_athlete_training_files(athlete.id)]
+        if existing_files:
+            with st.expander(f"Dateien verwalten ({len(existing_files)})"):
+                for fname in existing_files:
+                    col_name, col_ren, col_del = st.columns([5, 1, 1])
+                    with col_name:
+                        new_name = st.text_input(
+                            fname, value=fname,
+                            key=f"rename_{athlete.id}_{fname}",
+                            label_visibility="collapsed",
+                        )
+                    with col_ren:
+                        if st.button("✓", key=f"renbtn_{athlete.id}_{fname}",
+                                      help="Umbenennen", use_container_width=True):
+                            try:
+                                rename_training_file(athlete.id, fname, new_name)
+                                st.rerun()
+                            except Exception as e:
+                                st.error(f"Fehler: {e}")
+                    with col_del:
+                        if st.button("🗑️", key=f"delbtn_{athlete.id}_{fname}",
+                                      help="Löschen", use_container_width=True):
+                            delete_training_file(athlete.id, fname)
+                            st.rerun()
 
         st.markdown("---")
         edit_col, del_col = st.columns(2)

@@ -109,7 +109,7 @@ def list_athlete_training_files(athlete_id: str) -> list[str]:
         return []
     return sorted(
         str(p) for p in training_dir.iterdir()
-        if p.is_file() and (p.suffix.lower() in (".csv", ".fit") or p.name.lower().endswith(".gz"))
+        if p.is_file() and (p.suffix.lower() in (".csv", ".fit", ".gpx") or p.name.lower().endswith(".gz"))
     )
 
 
@@ -122,7 +122,7 @@ def list_unassigned_training_files() -> list[str]:
     training_root = DATA_DIR / "trainings"
     return sorted(
         p.name for p in training_root.iterdir()
-        if p.is_file() and p.suffix.lower() in (".csv", ".fit", ".gz")
+        if p.is_file() and p.suffix.lower() in (".csv", ".fit", ".gpx", ".gz")
     )
 
 
@@ -144,6 +144,59 @@ def assign_training_file(athlete_id: str, filename: str) -> str:
             a.training_files.append(str(dest))
     _save_athletes(athletes)
     return str(dest)
+
+
+def _split_training_filename(filename: str) -> tuple[str, str]:
+    """
+    Trennt einen Trainingsdateinamen in (Basisname, Endung).
+
+    Zusammengesetzte Endungen wie .fit.gz/.gpx.gz/.csv.gz werden als eine
+    Endung behandelt, damit sie beim Umbenennen erhalten bleiben.
+    """
+    lower = filename.lower()
+    for compound in (".fit.gz", ".gpx.gz", ".csv.gz"):
+        if lower.endswith(compound):
+            return filename[: -len(compound)], filename[-len(compound):]
+    dot = filename.rfind(".")
+    if dot <= 0:
+        return filename, ""
+    return filename[:dot], filename[dot:]
+
+
+def rename_training_file(athlete_id: str, old_filename: str, new_filename: str) -> str:
+    """
+    Benennt eine Trainingsdatei eines Athleten um.
+
+    Die Dateiendung muss erhalten bleiben, sonst würde die automatische
+    Formaterkennung (.csv/.fit/.gpx, ggf. .gz) beim nächsten Einlesen brechen.
+    """
+    new_filename = new_filename.strip()
+    if not new_filename or "/" in new_filename or "\\" in new_filename:
+        raise ValueError("Ungültiger Dateiname.")
+
+    _, old_ext = _split_training_filename(old_filename)
+    _, new_ext = _split_training_filename(new_filename)
+    if new_ext.lower() != old_ext.lower():
+        raise ValueError(f"Die Dateiendung muss '{old_ext}' bleiben.")
+
+    training_dir = DATA_DIR / "trainings" / athlete_id
+    src = training_dir / old_filename
+    dest = training_dir / new_filename
+
+    if not src.exists():
+        raise FileNotFoundError(f"Datei '{old_filename}' nicht gefunden.")
+    if dest.exists() and dest != src:
+        raise FileExistsError(f"Eine Datei namens '{new_filename}' existiert bereits.")
+
+    src.rename(dest)
+    return str(dest)
+
+
+def delete_training_file(athlete_id: str, filename: str) -> None:
+    """Löscht eine Trainingsdatei eines Athleten dauerhaft."""
+    path = DATA_DIR / "trainings" / athlete_id / filename
+    if path.exists():
+        path.unlink()
 
 
 def get_athlete_by_id(athlete_id: str) -> Optional[Athlete]:
