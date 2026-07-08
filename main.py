@@ -373,19 +373,21 @@ def _export_pdf(
     pdf.set_line_width(0.8)
     pdf.line(10, pdf.get_y(), 200, pdf.get_y())
     pdf.ln(4)
-    header_bottom_y = pdf.get_y()
+
+    content_start_y = pdf.get_y()
+    photo_bottom_y = content_start_y
 
     photo_bytes = decode_photo(athlete.photo_b64) if athlete else None
     if photo_bytes:
         from PIL import Image
 
         img = Image.open(io.BytesIO(photo_bytes))
-        photo_w = 32.0
+        photo_w = 55.0
         photo_h = photo_w * img.height / img.width
         photo_x = pdf.w - pdf.r_margin - photo_w
-        pdf.image(io.BytesIO(photo_bytes), x=photo_x, y=10, w=photo_w, h=photo_h)
-        header_bottom_y = max(header_bottom_y, 10 + photo_h + 4)
-    pdf.set_y(header_bottom_y)
+        pdf.image(io.BytesIO(photo_bytes), x=photo_x, y=content_start_y, w=photo_w, h=photo_h)
+        photo_bottom_y = content_start_y + photo_h
+    pdf.set_y(content_start_y)
 
     pdf.set_font("Helvetica", "B", 13)
     pdf.cell(0, 8, "Athlet", ln=True)
@@ -422,6 +424,8 @@ def _export_pdf(
     )
     pdf.cell(0, 6, f"Kohlenhydrate/Stunde: {carbs_per_hour} g", ln=True)
     pdf.ln(4)
+
+    pdf.set_y(max(pdf.get_y(), photo_bottom_y + 4))
 
     if nutrition_points:
         pdf.set_font("Helvetica", "B", 13)
