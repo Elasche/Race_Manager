@@ -229,6 +229,61 @@ def create_elevation_profile(
     return fig
 
 
+def create_elevation_profile_vertical(
+    route_df: pd.DataFrame,
+    nutrition_points: Optional[list[dict]] = None,
+    width: int = 420,
+    height: int = 1550,
+) -> go.Figure:
+    """
+    Erstellt ein vertikales Höhenprofil für den PDF-Ausdruck (Oberrohr-Streifen).
+
+    Die Distanz läuft von unten (0km, Start) nach oben (Ziel), damit der
+    Ausdruck als schmaler Streifen aufs Oberrohr geklebt werden kann.
+    """
+    fig = go.Figure()
+
+    y_vals = route_df["distance_km"] if "distance_km" in route_df.columns else pd.Series(range(len(route_df)))
+
+    fig.add_trace(go.Scatter(
+        x=route_df["elevation"].fillna(0),
+        y=y_vals,
+        fill="tozerox",
+        fillcolor="rgba(124, 58, 237, 0.15)",
+        line=dict(color=ROUTE_COLOR, width=2),
+        name="Höhe",
+        hoverinfo="skip",
+    ))
+
+    if nutrition_points:
+        for p in nutrition_points:
+            if p.get("type") == "drink":
+                color = _drink_color(p.get("bottle_index"))
+            elif p.get("type") == "food":
+                color = FOOD_COLOR
+            else:
+                color = GEL_COLOR
+            y_pos = p.get("distance_km", 0)
+            fig.add_hline(
+                y=y_pos,
+                line=dict(color=color, width=1.2, dash="dash"),
+                annotation=dict(text=p["label"], font=dict(size=10, color=color)),
+                annotation_position="right",
+            )
+
+    fig.update_layout(
+        xaxis_title="Höhe (m)",
+        yaxis_title="Distanz (km)",
+        width=width,
+        height=height,
+        margin=dict(l=60, r=110, t=20, b=40),
+        showlegend=False,
+        plot_bgcolor="#F9FAFB",
+        font=dict(size=13),
+    )
+    return fig
+
+
 def create_power_curve(power_curve: dict[str, float], ftp: Optional[float] = None) -> go.Figure:
     """
     Visualisiert die Leistungskurve (Mean Maximal Power) eines Athleten.

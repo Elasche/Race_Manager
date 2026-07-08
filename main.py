@@ -49,6 +49,7 @@ from modules.streckenanalys import (
 from modules.trainingsanalys import aggregate_athlete_data
 from modules.visualisierungen import (
     create_elevation_profile,
+    create_elevation_profile_vertical,
     create_nutrition_table,
     create_power_curve,
     create_route_map,
@@ -234,6 +235,19 @@ def _export_pdf(athlete: Optional[Athlete], route_df: Optional[pd.DataFrame], nu
     pdf.set_line_width(0.8)
     pdf.line(10, pdf.get_y(), 200, pdf.get_y())
     pdf.ln(4)
+    header_bottom_y = pdf.get_y()
+
+    photo_bytes = decode_photo(athlete.photo_b64) if athlete else None
+    if photo_bytes:
+        from PIL import Image
+
+        img = Image.open(io.BytesIO(photo_bytes))
+        photo_w = 32.0
+        photo_h = photo_w * img.height / img.width
+        photo_x = pdf.w - pdf.r_margin - photo_w
+        pdf.image(io.BytesIO(photo_bytes), x=photo_x, y=10, w=photo_w, h=photo_h)
+        header_bottom_y = max(header_bottom_y, 10 + photo_h + 4)
+    pdf.set_y(header_bottom_y)
 
     pdf.set_font("Helvetica", "B", 13)
     pdf.cell(0, 8, "Athlet", ln=True)
@@ -294,6 +308,29 @@ def _export_pdf(athlete: Optional[Athlete], route_df: Optional[pd.DataFrame], nu
     pdf.set_font("Helvetica", "I", 8)
     pdf.set_text_color(150, 150, 150)
     pdf.cell(0, 5, "Erstellt mit Race Manager", ln=True)
+    pdf.set_text_color(0, 0, 0)
+
+    if route_df is not None and not route_df.empty:
+        pdf.add_page()
+        pdf.set_font("Helvetica", "B", 14)
+        pdf.cell(0, 8, "Hoehenprofil (Start unten, Ziel oben)", ln=True)
+        pdf.set_font("Helvetica", "I", 9)
+        pdf.set_text_color(120, 120, 120)
+        pdf.cell(0, 5, "Ausschneiden und aufs Oberrohr kleben", ln=True)
+        pdf.set_text_color(0, 0, 0)
+        pdf.ln(2)
+
+        fig_vertical = create_elevation_profile_vertical(route_df, nutrition_points)
+        png_bytes = fig_vertical.to_image(format="png")
+
+        img_w_mm = 80.0
+        img_h_mm = img_w_mm * fig_vertical.layout.height / fig_vertical.layout.width
+        max_h_mm = pdf.h - pdf.get_y() - pdf.b_margin
+        if img_h_mm > max_h_mm:
+            img_h_mm = max_h_mm
+            img_w_mm = img_h_mm * fig_vertical.layout.width / fig_vertical.layout.height
+        x_pos = (pdf.w - img_w_mm) / 2
+        pdf.image(io.BytesIO(png_bytes), x=x_pos, y=pdf.get_y(), w=img_w_mm, h=img_h_mm)
 
     return pdf.output()
 
