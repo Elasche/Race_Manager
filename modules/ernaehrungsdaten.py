@@ -162,11 +162,19 @@ def build_selected_products(
 
 
 def check_hydration_capacity(
-    bottles: list[Bottle], target_time_h: float, min_ml_per_hour: float = 500.0
+    bottles: list[Bottle],
+    target_time_h: float,
+    feed_zone_times_h: Optional[list[float]] = None,
+    min_ml_per_hour: float = 500.0,
 ) -> Optional[dict]:
     """
-    Prüft, ob das mitgeführte Flaschenvolumen für die Zielzeit ausreicht, um im
-    Schnitt mindestens `min_ml_per_hour` zu decken (ohne Nachfüllen unterwegs).
+    Prüft, ob das mitgeführte Flaschenvolumen ausreicht, um im Schnitt
+    mindestens `min_ml_per_hour` zu decken.
+
+    An jeder Feedzone werden die Flaschen als komplett aufgefüllt angenommen;
+    relevant ist deshalb nicht die Zielzeit insgesamt, sondern der längste
+    Abschnitt ohne Nachfüllen (Start → erste Feedzone → ... → Ziel). Sind
+    genug Feedzonen eng genug geplant, verschwindet der Warnhinweis.
 
     Gibt None zurück, wenn ausreichend, sonst die berechneten Werte für einen
     Warnhinweis.
@@ -174,13 +182,19 @@ def check_hydration_capacity(
     if target_time_h <= 0 or not bottles:
         return None
     total_ml = sum(b.size_ml for b in bottles)
-    ml_per_hour = total_ml / target_time_h
+
+    checkpoints = sorted({0.0, target_time_h, *(feed_zone_times_h or [])})
+    segment_durations = [b - a for a, b in zip(checkpoints, checkpoints[1:])]
+    longest_segment_h = max(segment_durations) if segment_durations else target_time_h
+
+    ml_per_hour = total_ml / longest_segment_h if longest_segment_h > 0 else total_ml
     if ml_per_hour >= min_ml_per_hour:
         return None
     return {
         "total_ml": total_ml,
         "ml_per_hour": round(ml_per_hour, 0),
         "min_ml_per_hour": min_ml_per_hour,
+        "longest_segment_h": round(longest_segment_h, 2),
     }
 
 

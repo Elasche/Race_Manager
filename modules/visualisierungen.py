@@ -11,7 +11,7 @@ import plotly.graph_objects as go
 from modules.trainingsanalys import POWER_CURVE_DURATIONS
 
 ROUTE_COLOR = "#7C3AED"
-GEL_COLOR = "#111827"
+GEL_COLOR = "#FFD600"
 DRINK_COLOR = "#16a34a"
 FOOD_COLOR = "#f59e0b"
 CLIMB_COLOR = "#ef4444"

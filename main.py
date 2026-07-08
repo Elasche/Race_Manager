@@ -182,6 +182,25 @@ def _current_gel_product_name() -> str:
     return st.session_state.get("gel_product_choice", "")
 
 
+def _current_feed_zone_times_h(route_df: Optional[pd.DataFrame]) -> list[float]:
+    """
+    Wandelt die konfigurierten Feedzonen-Positionen (km) in Renndauer (h) um.
+
+    Wird u.a. für die Mindesthydrierungs-Prüfung gebraucht: an jeder Feedzone
+    gelten die Flaschen als aufgefüllt, relevant ist deshalb der längste
+    Abschnitt zwischen zwei Feedzonen (bzw. Start/Ziel), nicht die Zielzeit.
+    """
+    num_zones = st.session_state.get("num_feed_zones", 0)
+    if not num_zones or route_df is None or route_df.empty:
+        return []
+    total_km = calculate_route_metrics(route_df)["total_distance_km"]
+    route_with_time = estimate_time_at_points(route_df, st.session_state.target_time_h)
+    return [
+        time_at_distance(route_with_time, float(min(st.session_state.get(f"feedzone_km_{i}", 0.0), total_km)))
+        for i in range(num_zones)
+    ]
+
+
 def _build_nutrition_plan(route_df: Optional[pd.DataFrame] = None) -> tuple[list, list]:
     """
     Berechnet den Verpflegungsplan und ordnet ihn der Strecke zu.
@@ -218,11 +237,22 @@ def _pdf_safe(text: str) -> str:
     return text.encode("latin-1", errors="replace").decode("latin-1")
 
 
-def _export_pdf(athlete: Optional[Athlete], route_df: Optional[pd.DataFrame], nutrition_points: list[dict]) -> bytes:
+@st.cache_data(show_spinner="PDF wird erstellt…")
+def _export_pdf(
+    athlete: Optional[Athlete],
+    route_df: Optional[pd.DataFrame],
+    nutrition_points: list[dict],
+    target_time_h: float,
+    carbs_per_hour: int,
+) -> bytes:
     """
     Erstellt eine PDF-Übersicht des Rennplans.
 
-    Enthält Athleteninfo, Streckenmetriken und die Verpflegungstabelle.
+    Enthält Athleteninfo, Streckenmetriken und die Verpflegungstabelle. Das
+    vertikale Höhenprofil wird über Kaleido gerendert, was spürbar länger
+    dauert als reiner Text – deshalb ist diese Funktion gecacht, damit sie
+    nicht bei jedem Streamlit-Rerun neu läuft, sondern nur wenn sich Athlet,
+    Strecke, Verpflegungsplan, Zielzeit oder Kohlenhydratrate ändern.
     """
     from fpdf import FPDF
 
@@ -279,10 +309,10 @@ def _export_pdf(athlete: Optional[Athlete], route_df: Optional[pd.DataFrame], nu
     pdf.cell(
         0,
         6,
-        f"Zielzeit: {int(st.session_state.target_time_h)}h {int((st.session_state.target_time_h % 1) * 60):02d}min",
+        f"Zielzeit: {int(target_time_h)}h {int((target_time_h % 1) * 60):02d}min",
         ln=True,
     )
-    pdf.cell(0, 6, f"Kohlenhydrate/Stunde: {st.session_state.carbs_per_hour} g", ln=True)
+    pdf.cell(0, 6, f"Kohlenhydrate/Stunde: {carbs_per_hour} g", ln=True)
     pdf.ln(4)
 
     if nutrition_points:
@@ -585,13 +615,15 @@ with col_left:
     athlete = _selected_athlete()
     nutrition_events, nutrition_points = _build_nutrition_plan(route_df)
 
-    hydration_issue = check_hydration_capacity(_current_bottles(), st.session_state.target_time_h)
+    hydration_issue = check_hydration_capacity(
+        _current_bottles(), st.session_state.target_time_h, _current_feed_zone_times_h(route_df),
+    )
     if hydration_issue:
         st.warning(
-            f"💧 Deine Flaschen fassen zusammen {hydration_issue['total_ml']:.0f} ml – das ergibt nur "
-            f"{hydration_issue['ml_per_hour']:.0f} ml/h über die Zielzeit ({st.session_state.target_time_h:.2f}h), "
+            f"💧 Deine Flaschen fassen zusammen {hydration_issue['total_ml']:.0f} ml – ohne Nachfüllen reicht das "
+            f"für {hydration_issue['longest_segment_h']:.2f}h nur für {hydration_issue['ml_per_hour']:.0f} ml/h, "
             f"empfohlen sind mind. {hydration_issue['min_ml_per_hour']:.0f} ml/h. Größere/mehr Flaschen wählen "
-            "oder unten eine Feedzone zum Nachfüllen einplanen."
+            "oder unten eine (weitere) Feedzone zum Nachfüllen einplanen."
         )
 
     st.markdown('<div class="section-label">Feedzonen</div>', unsafe_allow_html=True)
@@ -625,27 +657,34 @@ with col_left:
                 total_km = calculate_route_metrics(route_df)["total_distance_km"]
                 route_with_time_fz = estimate_time_at_points(route_df, st.session_state.target_time_h)
 
-                zone_kms = []
                 for i in range(st.session_state.num_feed_zones):
                     zone_key = f"feedzone_km_{i}"
                     if zone_key not in st.session_state:
                         st.session_state[zone_key] = round(
                             total_km * (i + 1) / (st.session_state.num_feed_zones + 1), 1
                         )
-                    st.slider(
-                        f"Feedzone {i + 1} – Position (km)",
-                        min_value=0.0, max_value=float(total_km),
-                        value=float(min(st.session_state[zone_key], total_km)),
-                        step=0.5, key=zone_key,
-                    )
-                    zone_kms.append(st.session_state[zone_key])
 
+                zone_kms = [
+                    float(min(st.session_state[f"feedzone_km_{i}"], total_km))
+                    for i in range(st.session_state.num_feed_zones)
+                ]
                 sorted_kms = sorted(zone_kms)
                 boundaries_km = sorted_kms[1:] + [total_km]
+                boundary_for_km = dict(zip(sorted_kms, boundaries_km))
                 bottles_now = _current_bottles()
 
                 st.markdown("---")
-                for km, next_km in zip(sorted_kms, boundaries_km):
+                for i in range(st.session_state.num_feed_zones):
+                    zone_key = f"feedzone_km_{i}"
+                    st.markdown(f"**Feedzone {i + 1}**")
+                    st.number_input(
+                        "Position (km)",
+                        min_value=0.0, max_value=float(total_km),
+                        value=zone_kms[i],
+                        step=10.0, key=zone_key,
+                    )
+                    km = float(min(st.session_state[zone_key], total_km))
+                    next_km = boundary_for_km.get(km, total_km)
                     start_min = time_at_distance(route_with_time_fz, km) * 60.0
                     end_min = (
                         time_at_distance(route_with_time_fz, next_km) * 60.0
@@ -653,7 +692,6 @@ with col_left:
                         else st.session_state.target_time_h * 60.0
                     )
                     rec = build_feed_zone_recommendation(nutrition_events, start_min, end_min, bottles_now)
-                    st.markdown(f"**Feedzone bei km {km:.1f}**")
                     bottle_txt = ", ".join(rec["bottles_to_refill"]) or "–"
                     st.caption(f"🍼 Flaschen auffüllen: {bottle_txt}")
                     if rec["gel_counts"]:
@@ -663,7 +701,10 @@ with col_left:
                         st.caption("🍬 Keine weiteren Gele für diesen Abschnitt geplant.")
 
     if nutrition_points or (route_df is not None):
-        pdf_bytes = _export_pdf(athlete, route_df, nutrition_points)
+        pdf_bytes = _export_pdf(
+            athlete, route_df, nutrition_points,
+            st.session_state.target_time_h, st.session_state.carbs_per_hour,
+        )
         st.download_button(
             label="📄 Save Plan (PDF)",
             data=bytes(pdf_bytes),
