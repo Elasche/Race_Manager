@@ -20,6 +20,7 @@ from modules.athletenverwaltung import (
     list_athlete_training_files,
     list_unassigned_training_files,
     load_athletes,
+    normalize_photo_bytes,
     rename_training_file,
     update_athlete,
 )
@@ -37,6 +38,7 @@ from modules.ernaehrungsdaten import (
 from modules.streckenanalys import (
     calculate_route_metrics,
     calculate_target_time,
+    delete_route_file,
     detect_key_features,
     estimate_time_at_points,
     list_saved_routes,
@@ -75,9 +77,20 @@ st.markdown(
     }
     .athlete-card.selected { border-color: #7C3AED; background: #EDE9FE; }
     .metric-row { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; }
-    h1 { font-size: 1.6rem !important; margin-bottom: 0 !important; color: #4C1D95; }
     .section-label { font-size: 0.75rem; color: #6B7280; text-transform: uppercase;
                      letter-spacing: 0.05em; margin-top: 12px; margin-bottom: 4px; }
+
+    .app-header-bar {
+        background: #FFFFFF;
+        border-radius: 16px;
+        padding: 0.6rem 1rem;
+        text-align: center;
+        font-size: 1.7rem;
+        font-weight: 700;
+        color: #4C1D95;
+        box-shadow: 0 8px 20px rgba(76, 29, 149, 0.20);
+        margin-bottom: 1.1rem;
+    }
 
     /* ── Modernes Panel-Layout: kräftige lila Seitenpanels, helle Mitte ── */
     .stApp { background: linear-gradient(160deg, #F5F3FF 0%, #ECE9FB 100%); }
@@ -191,6 +204,18 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
+if not st.session_state.get("show_streamlit_menu", False):
+    st.markdown(
+        """
+<style>
+    header[data-testid="stHeader"] { display: none; }
+    div[data-testid="stAppViewContainer"] { padding-top: 0 !important; }
+    div[data-testid="stMain"] .block-container { padding-top: 1.5rem !important; }
+</style>
+""",
+        unsafe_allow_html=True,
+    )
+
 
 # ── Session-State initialisieren ─────────────────────────────────────────────
 
@@ -214,6 +239,7 @@ def _init_state() -> None:
         "show_add_athlete": False,
         "show_edit_athlete": False,
         "athletes_cache": None,
+        "show_streamlit_menu": False,
     }
     for key, val in defaults.items():
         if key not in st.session_state:
@@ -530,10 +556,9 @@ def _dialog_edit_athlete(athlete: Athlete) -> None:
         athlete.weight_kg = weight_kg or None
         athlete.default_carbs_per_hour = int(default_carbs)
         if photo:
-            athlete.photo_b64 = None
             import base64
 
-            athlete.photo_b64 = base64.b64encode(photo.read()).decode()
+            athlete.photo_b64 = base64.b64encode(normalize_photo_bytes(photo.read())).decode()
         update_athlete(athlete)
         _reload_athletes()
         st.success("Änderungen gespeichert.")
@@ -542,7 +567,7 @@ def _dialog_edit_athlete(athlete: Athlete) -> None:
 
 # ── Layout ───────────────────────────────────────────────────────────────────
 
-st.title("🚵 Race Manager")
+st.markdown('<div class="app-header-bar">Race Manager</div>', unsafe_allow_html=True)
 
 col_left, col_mid, col_right = st.columns([1.15, 2.2, 1.15], gap="medium")
 
@@ -579,50 +604,63 @@ with col_left:
     with st.expander("Strecke einstellen"):
         saved_routes = list_saved_routes()
         if saved_routes:
-            current_name = st.session_state.route_filename
-            route_idx = saved_routes.index(current_name) if current_name in saved_routes else 0
-            chosen_route = st.selectbox(
-                "Gespeicherte Strecke wählen",
-                saved_routes,
-                index=route_idx,
-                label_visibility="collapsed",
-            )
-            if chosen_route != st.session_state.route_filename:
-                try:
-                    df = load_saved_route(chosen_route)
-                    st.session_state.route_df = df
-                    st.session_state.route_filename = chosen_route
+            select_col, del_col = st.columns([5, 1])
+            with select_col:
+                current_name = st.session_state.route_filename
+                route_idx = saved_routes.index(current_name) if current_name in saved_routes else 0
+                chosen_route = st.selectbox(
+                    "Gespeicherte Strecke wählen",
+                    saved_routes,
+                    index=route_idx,
+                    label_visibility="collapsed",
+                )
+                if chosen_route != st.session_state.route_filename:
+                    try:
+                        df = load_saved_route(chosen_route)
+                        st.session_state.route_df = df
+                        st.session_state.route_filename = chosen_route
 
-                    athlete = _selected_athlete()
-                    ftp = _get_athlete_stats(athlete)["ftp"] if athlete else None
-                    st.session_state.target_time_h = calculate_target_time(df, ftp)
-                except Exception as e:
-                    st.error(f"Fehler beim Laden: {e}")
+                        athlete = _selected_athlete()
+                        ftp = _get_athlete_stats(athlete)["ftp"] if athlete else None
+                        st.session_state.target_time_h = calculate_target_time(df, ftp)
+                    except Exception as e:
+                        st.error(f"Fehler beim Laden: {e}")
+            with del_col:
+                if st.button("🗑️", key="delete_route_btn", help="Strecke löschen", use_container_width=True):
+                    delete_route_file(chosen_route)
+                    if st.session_state.route_filename == chosen_route:
+                        st.session_state.route_df = None
+                        st.session_state.route_filename = ""
+                    st.success(f"'{chosen_route}' gelöscht.")
+                    st.rerun()
         else:
             st.caption("Noch keine gespeicherten Strecken.")
 
+        route_upload_key = f"route_upload_{st.session_state.get('route_upload_seq', 0)}"
         route_file = st.file_uploader(
-            "Neue Strecke hochladen (.gpx / .csv)", type=["gpx", "csv"], label_visibility="collapsed"
+            "Neue Strecke hochladen (.gpx / .csv)", type=["gpx", "csv"],
+            key=route_upload_key, label_visibility="collapsed",
         )
-        if route_file is not None and route_file.name != st.session_state.get("_last_uploaded_route"):
-            try:
-                content = route_file.read()
-                save_route_file(route_file.name, content)
-                df = load_route(content, route_file.name)
-                st.session_state.route_df = df
-                st.session_state.route_filename = route_file.name
-                st.session_state._last_uploaded_route = route_file.name
+        if route_file is not None:
+            if st.button("Hochladen bestätigen", key="confirm_route_upload", use_container_width=True):
+                try:
+                    content = route_file.read()
+                    save_route_file(route_file.name, content)
+                    df = load_route(content, route_file.name)
+                    st.session_state.route_df = df
+                    st.session_state.route_filename = route_file.name
 
-                athlete = _selected_athlete()
-                ftp = _get_athlete_stats(athlete)["ftp"] if athlete else None
-                suggested = calculate_target_time(df, ftp)
-                st.session_state.target_time_h = suggested
-                st.success(
-                    f"{route_file.name} gespeichert · Vorschlag: {int(suggested)}h {int((suggested % 1) * 60):02d}min"
-                )
-                st.rerun()
-            except Exception as e:
-                st.error(f"Fehler beim Laden: {e}")
+                    athlete = _selected_athlete()
+                    ftp = _get_athlete_stats(athlete)["ftp"] if athlete else None
+                    suggested = calculate_target_time(df, ftp)
+                    st.session_state.target_time_h = suggested
+                    st.session_state.route_upload_seq = st.session_state.get("route_upload_seq", 0) + 1
+                    st.success(
+                        f"{route_file.name} gespeichert · Vorschlag: {int(suggested)}h {int((suggested % 1) * 60):02d}min"
+                    )
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"Fehler beim Laden: {e}")
 
         route_df = st.session_state.route_df
         if route_df is not None:
@@ -826,6 +864,12 @@ with col_left:
             use_container_width=True,
         )
 
+    st.checkbox(
+        "Streamlit-Menü anzeigen",
+        key="show_streamlit_menu",
+        help="Blendet die Streamlit-Werkzeugleiste (Rerun, Settings, Deploy, ...) oben ein oder aus.",
+    )
+
 
 # ── MITTLERE SPALTE ───────────────────────────────────────────────────────────
 with col_mid:
@@ -838,17 +882,16 @@ with col_mid:
         fig_map = create_route_map(route_with_time, nutrition_points, key_features)
         st.plotly_chart(fig_map, width="stretch", config={"scrollZoom": True})
 
-        chart_col, table_col = st.columns([1.2, 1])
-        with chart_col:
-            fig_elev = create_elevation_profile(route_df, nutrition_points)
-            st.plotly_chart(fig_elev, width="stretch")
-        with table_col:
-            st.markdown('<div class="section-label">Verpflegungsplan</div>', unsafe_allow_html=True)
-            df_table = create_nutrition_table(nutrition_points)
-            if not df_table.empty:
-                st.dataframe(df_table, use_container_width=True, hide_index=True, height=230)
-            else:
-                st.caption("Kein Plan – bitte Strecke und Athlet auswählen.")
+        fig_elev = create_elevation_profile(route_df, nutrition_points)
+        st.plotly_chart(fig_elev, width="stretch")
+
+        st.markdown('<div class="section-label">Verpflegungsplan</div>', unsafe_allow_html=True)
+        df_table = create_nutrition_table(nutrition_points)
+        if not df_table.empty:
+            table_height = 38 * (len(df_table) + 1) + 40
+            st.dataframe(df_table, use_container_width=True, hide_index=True, height=table_height)
+        else:
+            st.caption("Kein Plan – bitte Strecke und Athlet auswählen.")
     else:
         st.markdown(
             "<div style='text-align:center; color:#9CA3AF; padding: 80px 0;'>"
@@ -918,24 +961,31 @@ with col_right:
         st.markdown("---")
         st.markdown('<div class="section-label">Trainingsdaten</div>', unsafe_allow_html=True)
         upload_key = f"training_upload_{st.session_state.get('training_upload_seq', 0)}"
-        training_file = st.file_uploader(
-            "Trainingsdatei hinzufügen (.csv / .fit / .gpx / .gz)",
+        training_files_up = st.file_uploader(
+            "Trainingsdateien hinzufügen (.csv / .fit / .gpx / .gz)",
             type=["csv", "fit", "gpx", "gz"],
             key=upload_key,
             label_visibility="collapsed",
+            accept_multiple_files=True,
         )
-        if training_file is not None:
+        if training_files_up:
             if st.button("Hochladen bestätigen", key="confirm_training_upload", use_container_width=True):
-                try:
-                    add_training_file(athlete.id, training_file.name, training_file.read())
-                    _reload_athletes()
-                    # Uploader-Key wechseln, damit die Auswahl danach geleert wird
-                    # (verhindert, dass dieselbe Datei bei jedem weiteren Rerun erneut hochgeladen wird).
-                    st.session_state.training_upload_seq = st.session_state.get("training_upload_seq", 0) + 1
-                    st.success(f"'{training_file.name}' gespeichert.")
-                    st.rerun()
-                except Exception as e:
-                    st.error(f"Fehler: {e}")
+                saved, errors = [], []
+                for training_file in training_files_up:
+                    try:
+                        add_training_file(athlete.id, training_file.name, training_file.read())
+                        saved.append(training_file.name)
+                    except Exception as e:
+                        errors.append(f"{training_file.name}: {e}")
+                _reload_athletes()
+                # Uploader-Key wechseln, damit die Auswahl danach geleert wird
+                # (verhindert, dass dieselben Dateien bei jedem weiteren Rerun erneut hochgeladen werden).
+                st.session_state.training_upload_seq = st.session_state.get("training_upload_seq", 0) + 1
+                if saved:
+                    st.success(f"{len(saved)} Datei(en) gespeichert.")
+                for err in errors:
+                    st.error(f"Fehler: {err}")
+                st.rerun()
 
         unassigned = list_unassigned_training_files()
         if unassigned:
