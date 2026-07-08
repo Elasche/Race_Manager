@@ -75,9 +75,117 @@ st.markdown(
     }
     .athlete-card.selected { border-color: #7C3AED; background: #EDE9FE; }
     .metric-row { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; }
-    h1 { font-size: 1.6rem !important; margin-bottom: 0 !important; }
+    h1 { font-size: 1.6rem !important; margin-bottom: 0 !important; color: #4C1D95; }
     .section-label { font-size: 0.75rem; color: #6B7280; text-transform: uppercase;
                      letter-spacing: 0.05em; margin-top: 12px; margin-bottom: 4px; }
+
+    /* ── Modernes Panel-Layout: kräftige lila Seitenpanels, helle Mitte ── */
+    .stApp { background: linear-gradient(160deg, #F5F3FF 0%, #ECE9FB 100%); }
+
+    div[data-testid="stColumn"]:has(.panel-marker-left),
+    div[data-testid="stColumn"]:has(.panel-marker-right) {
+        background: linear-gradient(165deg, #6D28D9 0%, #8B5CF6 100%);
+        border-radius: 22px;
+        padding: 1.3rem 1.2rem 2rem;
+        box-shadow: 0 12px 28px rgba(76, 29, 149, 0.28);
+    }
+
+    div[data-testid="stColumn"]:has(.panel-marker-left) *,
+    div[data-testid="stColumn"]:has(.panel-marker-right) * {
+        color: #F5F3FF !important;
+    }
+
+    div[data-testid="stColumn"]:has(.panel-marker-left) .section-label,
+    div[data-testid="stColumn"]:has(.panel-marker-right) .section-label {
+        color: #DDD6FE !important;
+    }
+
+    /* Auswahlfenster (Select/Input) bekommen ein leichtes Lila statt Weiß,
+       damit sie sich vom kräftigen Panel abheben und lesbar bleiben */
+    div[data-testid="stColumn"]:has(.panel-marker-left) [data-baseweb="select"] > div,
+    div[data-testid="stColumn"]:has(.panel-marker-right) [data-baseweb="select"] > div,
+    div[data-testid="stColumn"]:has(.panel-marker-left) input,
+    div[data-testid="stColumn"]:has(.panel-marker-right) input,
+    div[data-testid="stColumn"]:has(.panel-marker-left) [data-testid="stNumberInputContainer"],
+    div[data-testid="stColumn"]:has(.panel-marker-right) [data-testid="stNumberInputContainer"] {
+        background-color: #EDE9FE !important;
+        border-radius: 8px;
+    }
+
+    /* st.expander ("Strecke/Flaschen/Feedzonen einstellen") ist von Haus aus
+       transparent und ließ das kräftige Panel-Lila durchscheinen – dadurch
+       wirkte der Text darin wie im Hintergrund statt auf einer eigenen Fläche */
+    div[data-testid="stColumn"]:has(.panel-marker-left) [data-testid="stExpander"],
+    div[data-testid="stColumn"]:has(.panel-marker-right) [data-testid="stExpander"] {
+        background-color: #EDE9FE !important;
+        border-radius: 12px !important;
+        border: none !important;
+    }
+
+    /* Auf Streamlits eigenen (hellen) Widget-Flächen bleibt der Text dunkel */
+    div[data-testid="stColumn"]:has(.panel-marker-left) [data-baseweb="select"] *,
+    div[data-testid="stColumn"]:has(.panel-marker-right) [data-baseweb="select"] *,
+    div[data-testid="stColumn"]:has(.panel-marker-left) input,
+    div[data-testid="stColumn"]:has(.panel-marker-right) input,
+    div[data-testid="stColumn"]:has(.panel-marker-left) [data-testid="stNumberInputContainer"] *,
+    div[data-testid="stColumn"]:has(.panel-marker-right) [data-testid="stNumberInputContainer"] *,
+    div[data-testid="stColumn"]:has(.panel-marker-left) [data-testid="stDataFrame"] *,
+    div[data-testid="stColumn"]:has(.panel-marker-right) [data-testid="stDataFrame"] *,
+    div[data-testid="stColumn"]:has(.panel-marker-left) [data-testid="stExpander"] *,
+    div[data-testid="stColumn"]:has(.panel-marker-right) [data-testid="stExpander"] *,
+    div[data-testid="stColumn"]:has(.panel-marker-left) [data-testid="stAlert"] *,
+    div[data-testid="stColumn"]:has(.panel-marker-right) [data-testid="stAlert"] *,
+    div[data-testid="stColumn"]:has(.panel-marker-left) button *,
+    div[data-testid="stColumn"]:has(.panel-marker-right) button *,
+    div[data-testid="stColumn"]:has(.panel-marker-left) button,
+    div[data-testid="stColumn"]:has(.panel-marker-right) button {
+        color: #3B0764 !important;
+    }
+
+    /* Die Dropdown-Liste eines Selectbox wird von Streamlit außerhalb der
+       Spalte gerendert (Portal) – deshalb global statt scoped stylen */
+    ul[data-testid="stSelectboxVirtualDropdown"] {
+        background-color: #F5F3FF !important;
+    }
+    ul[data-testid="stSelectboxVirtualDropdown"] li {
+        background-color: #F5F3FF !important;
+        color: #3B0764 !important;
+    }
+    ul[data-testid="stSelectboxVirtualDropdown"] li:hover,
+    ul[data-testid="stSelectboxVirtualDropdown"] li[aria-selected="true"] {
+        background-color: #DDD6FE !important;
+    }
+
+    div[data-testid="stColumn"]:has(.panel-marker-mid) {
+        background: #FFFFFF;
+        border-radius: 22px;
+        padding: 1.3rem 1.4rem 2rem;
+        box-shadow: 0 12px 28px rgba(17, 24, 39, 0.07);
+    }
+
+    /* Slider/Radio nutzen primaryColor (=lila) und verschwinden sonst im Panel */
+    div[data-testid="stColumn"]:has(.panel-marker-left) [data-testid="stSlider"],
+    div[data-testid="stColumn"]:has(.panel-marker-right) [data-testid="stSlider"],
+    div[data-testid="stColumn"]:has(.panel-marker-left) [data-testid="stRadio"],
+    div[data-testid="stColumn"]:has(.panel-marker-right) [data-testid="stRadio"] {
+        background: rgba(255, 255, 255, 0.14);
+        border-radius: 12px;
+        padding: 0.7rem 0.9rem 0.5rem;
+        margin-bottom: 0.4rem;
+    }
+
+    div[data-testid="stColumn"]:has(.panel-marker-left) [data-testid="stSlider"] [role="slider"],
+    div[data-testid="stColumn"]:has(.panel-marker-right) [data-testid="stSlider"] [role="slider"] {
+        background-color: #FFD600 !important;
+        box-shadow: 0 0 0 4px rgba(255, 255, 255, 0.9), 0 2px 6px rgba(0, 0, 0, 0.35) !important;
+    }
+
+    /* Warnhinweis (Flüssigkeitszufuhr) leicht gelb hinterlegen */
+    div[data-testid="stColumn"]:has(.panel-marker-left) [data-testid="stAlertContainer"],
+    div[data-testid="stColumn"]:has(.panel-marker-right) [data-testid="stAlertContainer"] {
+        background-color: #FEF9C3 !important;
+        border-radius: 10px;
+    }
 </style>
 """,
     unsafe_allow_html=True,
@@ -436,6 +544,7 @@ col_left, col_mid, col_right = st.columns([1.15, 2.2, 1.15], gap="medium")
 
 # ── LINKE SPALTE ─────────────────────────────────────────────────────────────
 with col_left:
+    st.markdown('<div class="panel-marker panel-marker-left"></div>', unsafe_allow_html=True)
     athletes = _get_athletes()
 
     st.markdown('<div class="section-label">Athlet</div>', unsafe_allow_html=True)
@@ -716,6 +825,7 @@ with col_left:
 
 # ── MITTLERE SPALTE ───────────────────────────────────────────────────────────
 with col_mid:
+    st.markdown('<div class="panel-marker panel-marker-mid"></div>', unsafe_allow_html=True)
     route_df = st.session_state.route_df
     if route_df is not None and not route_df.empty:
         route_with_time = estimate_time_at_points(route_df, st.session_state.target_time_h)
@@ -762,6 +872,7 @@ with col_mid:
 
 # ── RECHTE SPALTE ─────────────────────────────────────────────────────────────
 with col_right:
+    st.markdown('<div class="panel-marker panel-marker-right"></div>', unsafe_allow_html=True)
     athlete = _selected_athlete()
 
     if athlete:
