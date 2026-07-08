@@ -401,6 +401,15 @@ with col_left:
     gel_brand_options = get_brands_by_type(nutrition_catalog, "gel")
 
     with st.expander("Flaschen & Produkte einstellen"):
+        st.markdown("**Zielrate**")
+        st.session_state.carbs_per_hour = st.slider(
+            "Kohlenhydrate / Stunde (g)",
+            min_value=0,
+            max_value=200,
+            value=st.session_state.carbs_per_hour,
+            step=5,
+        )
+
         st.radio(
             "Anzahl Flaschen am Rad", [1, 2],
             index=[1, 2].index(st.session_state.num_bottles),
@@ -452,15 +461,7 @@ with col_left:
         f"🚴 F{i + 1}: {b.size_ml}ml {b.brand or 'Wasser'}" for i, b in enumerate(_current_bottles())
     )
     gel_summary = _current_gel_brand() or "keine"
-    st.caption(f"{bottle_summary} · 🍮 Gel: {gel_summary}")
-
-    st.session_state.carbs_per_hour = st.slider(
-        "Kohlenhydrate / Stunde (g)",
-        min_value=0,
-        max_value=200,
-        value=st.session_state.carbs_per_hour,
-        step=5,
-    )
+    st.caption(f"{bottle_summary} · 🍮 Gel: {gel_summary} · {st.session_state.carbs_per_hour}g KH/h")
 
     st.markdown('<div class="section-label">Strecke</div>', unsafe_allow_html=True)
 
