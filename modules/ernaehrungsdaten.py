@@ -135,7 +135,9 @@ def build_selected_products(
     Flaschen mit Drink-Mix werden auf ihre individuelle Größe skaliert und
     behalten ihren bottle_index, damit sie später der richtigen Flasche
     zugeordnet werden können. Flaschen mit "Wasser" (leerer brand) liefern
-    keine Kohlenhydrate. Ist `gel_product_name` gesetzt, wird nur diese eine
+    keine Kohlenhydrate, bekommen aber ein Platzhalter-Wasser-Produkt (0g KH),
+    damit auch reine Trinkflaschen eine Erinnerung im Plan/auf der Karte
+    erzeugen. Ist `gel_product_name` gesetzt, wird nur diese eine
     Produktlinie des Herstellers verwendet statt aller seiner Gel-Produkte.
     """
     selected: list[NutritionProduct] = []
@@ -147,10 +149,14 @@ def build_selected_products(
         selected.extend(gel_products)
 
     for i, bottle in enumerate(bottles):
-        if not bottle.brand:
-            continue
-        for p in get_products_by_brand(products, "drink", bottle.brand):
-            selected.append(scale_product_for_bottle(p, bottle.size_ml, bottle_index=i))
+        if bottle.brand:
+            for p in get_products_by_brand(products, "drink", bottle.brand):
+                selected.append(scale_product_for_bottle(p, bottle.size_ml, bottle_index=i))
+        else:
+            selected.append(NutritionProduct(
+                name="Wasser", type="drink", carbs_g=0.0,
+                brand="Wasser", volume_ml=bottle.size_ml, bottle_index=i,
+            ))
 
     return selected
 
@@ -223,46 +229,75 @@ def calculate_nutrition_plan(
     target_time_h: float,
     carbs_per_hour: int,
     products: list[NutritionProduct],
+    hydration_interval_min: float = 30.0,
 ) -> list[NutritionEvent]:
     """
     Berechnet einen Verpflegungsplan für ein Rennen.
 
     `products` ist die bereits ausgewählte Produktliste (siehe
     build_selected_products) - z.B. der gewählte Gel-Hersteller plus die
-    Drink-Mix-Produkte der Flaschen, die keine "Wasser"-Flaschen sind.
-    Verteilt diese Produkte so, dass das Kohlenhydratziel (carbs_per_hour)
-    möglichst genau erreicht wird. Erste Einnahme nach 20 Minuten,
-    letzte Einnahme mindestens 10 Minuten vor dem Ziel.
+    Drink-Mix-Produkte der Flaschen, die keine "Wasser"-Flaschen sind, plus
+    Platzhalter-Wasser-Produkte für reine Trinkflaschen.
+
+    Es werden zwei unabhängige Zeitpläne berechnet und chronologisch
+    zusammengeführt: Kohlenhydrat-Produkte (Gel/Drink-Mix) werden so verteilt,
+    dass das Kohlenhydratziel (carbs_per_hour) möglichst genau erreicht wird;
+    reine Wasser-Flaschen bekommen unabhängig davon eine feste Erinnerung alle
+    `hydration_interval_min` Minuten, damit auch ohne Kohlenhydrat-Produkt ein
+    Trinkhinweis auf Karte/Höhenprofil erscheint. Erste Einnahme nach 20
+    Minuten, letzte Einnahme mindestens 10 Minuten vor dem Ziel.
     """
     if not products or target_time_h <= 0:
         return []
 
-    selected = products
-    avg_carbs = sum(p.carbs_g for p in selected) / len(selected)
-    interval_min = max(15.0, (avg_carbs / max(carbs_per_hour, 1)) * 60.0)
+    carb_products = [p for p in products if p.carbs_g > 0]
+    water_products = [p for p in products if p.carbs_g <= 0]
+    end_min = target_time_h * 60.0 - 10.0
+
+    raw: list[tuple[float, NutritionProduct, str]] = []
+
+    if carb_products:
+        avg_carbs = sum(p.carbs_g for p in carb_products) / len(carb_products)
+        interval_min = max(15.0, (avg_carbs / max(carbs_per_hour, 1)) * 60.0)
+        current_min = 20.0
+        idx = 0
+        gel_count = drink_count = 0
+        while current_min <= end_min:
+            product = carb_products[idx % len(carb_products)]
+            if product.type == "gel":
+                gel_count += 1
+                label = f"Gel{gel_count}"
+            else:
+                drink_count += 1
+                bottle_label = f"F{product.bottle_index + 1}-" if product.bottle_index is not None else ""
+                label = f"{bottle_label}Drink{drink_count}"
+            raw.append((round(current_min, 1), product, label))
+            current_min += interval_min
+            idx += 1
+
+    if water_products:
+        current_min = 20.0
+        idx = 0
+        water_count = 0
+        while current_min <= end_min:
+            product = water_products[idx % len(water_products)]
+            water_count += 1
+            bottle_label = f"F{product.bottle_index + 1}-" if product.bottle_index is not None else ""
+            raw.append((round(current_min, 1), product, f"{bottle_label}Wasser{water_count}"))
+            current_min += hydration_interval_min
+            idx += 1
+
+    raw.sort(key=lambda item: item[0])
 
     events: list[NutritionEvent] = []
-    current_min = 20.0
-    end_min = target_time_h * 60.0 - 10.0
     cumulative = 0.0
-    idx = 0
-
-    while current_min <= end_min:
-        product = selected[idx % len(selected)]
+    for time_min, product, label in raw:
         cumulative += product.carbs_g
-        count_of_type = sum(1 for e in events if e.product.type == product.type) + 1
-        if product.type == "drink" and product.bottle_index is not None:
-            label = f"F{product.bottle_index + 1}-Drink{count_of_type}"
-        else:
-            label = f"{product.type.capitalize()}{count_of_type}"
-
         events.append(NutritionEvent(
-            time_min=round(current_min, 1),
+            time_min=time_min,
             product=product,
             cumulative_carbs_g=round(cumulative, 1),
             label=label,
         ))
-        current_min += interval_min
-        idx += 1
 
     return events

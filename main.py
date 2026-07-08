@@ -394,6 +394,86 @@ with col_left:
         if st.button("＋", help="Neuen Athleten anlegen", use_container_width=True):
             _dialog_add_athlete()
 
+    st.markdown('<div class="section-label">Strecke</div>', unsafe_allow_html=True)
+
+    with st.expander("Strecke einstellen"):
+        saved_routes = list_saved_routes()
+        if saved_routes:
+            current_name = st.session_state.route_filename
+            route_idx = saved_routes.index(current_name) if current_name in saved_routes else 0
+            chosen_route = st.selectbox(
+                "Gespeicherte Strecke wählen",
+                saved_routes,
+                index=route_idx,
+                label_visibility="collapsed",
+            )
+            if chosen_route != st.session_state.route_filename:
+                try:
+                    df = load_saved_route(chosen_route)
+                    st.session_state.route_df = df
+                    st.session_state.route_filename = chosen_route
+
+                    athlete = _selected_athlete()
+                    ftp = _get_athlete_stats(athlete)["ftp"] if athlete else None
+                    st.session_state.target_time_h = calculate_target_time(df, ftp)
+                except Exception as e:
+                    st.error(f"Fehler beim Laden: {e}")
+        else:
+            st.caption("Noch keine gespeicherten Strecken.")
+
+        route_file = st.file_uploader(
+            "Neue Strecke hochladen (.gpx / .csv)", type=["gpx", "csv"], label_visibility="collapsed"
+        )
+        if route_file is not None and route_file.name != st.session_state.get("_last_uploaded_route"):
+            try:
+                content = route_file.read()
+                save_route_file(route_file.name, content)
+                df = load_route(content, route_file.name)
+                st.session_state.route_df = df
+                st.session_state.route_filename = route_file.name
+                st.session_state._last_uploaded_route = route_file.name
+
+                athlete = _selected_athlete()
+                ftp = _get_athlete_stats(athlete)["ftp"] if athlete else None
+                suggested = calculate_target_time(df, ftp)
+                st.session_state.target_time_h = suggested
+                st.success(
+                    f"{route_file.name} gespeichert · Vorschlag: {int(suggested)}h {int((suggested % 1) * 60):02d}min"
+                )
+                st.rerun()
+            except Exception as e:
+                st.error(f"Fehler beim Laden: {e}")
+
+        route_df = st.session_state.route_df
+        if route_df is not None:
+            m = calculate_route_metrics(route_df)
+            st.caption(f"📍 {m['total_distance_km']} km · ⬆ {m['elevation_gain_m']:.0f}m · ⬇ {m['elevation_loss_m']:.0f}m")
+
+        st.markdown("**Zielzeit anpassen**")
+        st.session_state.target_time_h = st.slider(
+            "Zielzeit (h)",
+            min_value=0.5,
+            max_value=12.0,
+            value=float(st.session_state.target_time_h),
+            step=0.25,
+            format="%.2f h",
+            label_visibility="collapsed",
+        )
+        th = int(st.session_state.target_time_h)
+        tm = int((st.session_state.target_time_h % 1) * 60)
+        st.caption(f"Zielzeit: **{th}h {tm:02d}min**")
+
+    route_df = st.session_state.route_df
+    if route_df is not None:
+        m = calculate_route_metrics(route_df)
+        route_summary = (
+            f"📍 {st.session_state.route_filename or 'Strecke'} · {m['total_distance_km']} km · "
+            f"⬆ {m['elevation_gain_m']:.0f}m · 🎯 {th}h {tm:02d}min"
+        )
+    else:
+        route_summary = "Noch keine Strecke ausgewählt."
+    st.caption(route_summary)
+
     st.markdown('<div class="section-label">Verpflegung</div>', unsafe_allow_html=True)
 
     nutrition_catalog = load_products()
@@ -462,74 +542,6 @@ with col_left:
     )
     gel_summary = _current_gel_brand() or "keine"
     st.caption(f"{bottle_summary} · 🍮 Gel: {gel_summary} · {st.session_state.carbs_per_hour}g KH/h")
-
-    st.markdown('<div class="section-label">Strecke</div>', unsafe_allow_html=True)
-
-    saved_routes = list_saved_routes()
-    if saved_routes:
-        current_name = st.session_state.route_filename
-        route_idx = saved_routes.index(current_name) if current_name in saved_routes else 0
-        chosen_route = st.selectbox(
-            "Gespeicherte Strecke wählen",
-            saved_routes,
-            index=route_idx,
-            label_visibility="collapsed",
-        )
-        if chosen_route != st.session_state.route_filename:
-            try:
-                df = load_saved_route(chosen_route)
-                st.session_state.route_df = df
-                st.session_state.route_filename = chosen_route
-
-                athlete = _selected_athlete()
-                ftp = _get_athlete_stats(athlete)["ftp"] if athlete else None
-                st.session_state.target_time_h = calculate_target_time(df, ftp)
-            except Exception as e:
-                st.error(f"Fehler beim Laden: {e}")
-    else:
-        st.caption("Noch keine gespeicherten Strecken.")
-
-    route_file = st.file_uploader(
-        "Neue Strecke hochladen (.gpx / .csv)", type=["gpx", "csv"], label_visibility="collapsed"
-    )
-    if route_file is not None and route_file.name != st.session_state.get("_last_uploaded_route"):
-        try:
-            content = route_file.read()
-            save_route_file(route_file.name, content)
-            df = load_route(content, route_file.name)
-            st.session_state.route_df = df
-            st.session_state.route_filename = route_file.name
-            st.session_state._last_uploaded_route = route_file.name
-
-            athlete = _selected_athlete()
-            ftp = _get_athlete_stats(athlete)["ftp"] if athlete else None
-            suggested = calculate_target_time(df, ftp)
-            st.session_state.target_time_h = suggested
-            st.success(
-                f"{route_file.name} gespeichert · Vorschlag: {int(suggested)}h {int((suggested % 1) * 60):02d}min"
-            )
-            st.rerun()
-        except Exception as e:
-            st.error(f"Fehler beim Laden: {e}")
-
-    route_df = st.session_state.route_df
-    if route_df is not None:
-        m = calculate_route_metrics(route_df)
-        st.caption(f"📍 {m['total_distance_km']} km · ⬆ {m['elevation_gain_m']:.0f}m · ⬇ {m['elevation_loss_m']:.0f}m")
-
-    st.markdown('<div class="section-label">Zielzeit anpassen</div>', unsafe_allow_html=True)
-    st.session_state.target_time_h = st.slider(
-        "Zielzeit (h)",
-        min_value=0.5,
-        max_value=12.0,
-        value=float(st.session_state.target_time_h),
-        step=0.25,
-        format="%.2f h",
-        label_visibility="collapsed",
-    )
-    th = int(st.session_state.target_time_h)
-    tm = int((st.session_state.target_time_h % 1) * 60)
-    st.caption(f"Zielzeit: **{th}h {tm:02d}min**")
 
     st.markdown("---")
 
