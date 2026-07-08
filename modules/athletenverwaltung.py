@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+import io
 import json
 import uuid
 from dataclasses import asdict, dataclass, field
@@ -62,6 +63,26 @@ def _save_athletes(athletes: list[Athlete]) -> None:
         json.dump({"athletes": [asdict(a) for a in athletes]}, f, indent=2, ensure_ascii=False)
 
 
+def normalize_photo_bytes(photo_bytes: bytes) -> bytes:
+    """
+    Richtet ein hochgeladenes Foto anhand seiner EXIF-Orientierung korrekt aus.
+
+    Handyfotos speichern die Pixel oft "liegend" plus ein EXIF-Tag, das die
+    Anzeige-Drehung vorgibt. Nicht jede Stelle, die das Bild später anzeigt
+    (Streamlit, die PDF-Erstellung, ...), wertet dieses Tag aus - deshalb wird
+    die Drehung hier einmalig beim Speichern fest in die Pixel eingebacken,
+    damit das Foto überall gleich (und wie hochgeladen) erscheint.
+    """
+    from PIL import Image, ImageOps
+
+    img = Image.open(io.BytesIO(photo_bytes))
+    fmt = img.format or "JPEG"
+    transposed = ImageOps.exif_transpose(img)
+    buffer = io.BytesIO()
+    transposed.save(buffer, format=fmt)
+    return buffer.getvalue()
+
+
 def create_athlete(
     name: str,
     birth_year: int,
@@ -70,6 +91,8 @@ def create_athlete(
     default_carbs_per_hour: Optional[int] = None,
 ) -> Athlete:
     """Legt einen neuen Athleten an und persistiert ihn."""
+    if photo_bytes:
+        photo_bytes = normalize_photo_bytes(photo_bytes)
     photo_b64 = base64.b64encode(photo_bytes).decode("utf-8") if photo_bytes else None
     athlete = Athlete(
         name=name,

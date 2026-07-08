@@ -44,6 +44,13 @@ def load_saved_route(filename: str) -> pd.DataFrame:
     return load_route(path.read_bytes(), filename)
 
 
+def delete_route_file(filename: str) -> None:
+    """Löscht eine gespeicherte Streckendatei dauerhaft."""
+    path = ROUTES_DIR / filename
+    if path.exists():
+        path.unlink()
+
+
 def _haversine_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
     """Berechnet die Luftlinienentfernung zwischen zwei GPS-Koordinaten in Kilometern."""
     R = 6371.0
