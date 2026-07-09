@@ -364,6 +364,7 @@ def suggest_nutrition_points(
             "carbs_g": event.product.carbs_g,
             "bottle_index": event.product.bottle_index,
             "cumulative_carbs_g": event.cumulative_carbs_g,
+            "is_feed_zone": event.is_feed_zone,
             "lat": float(row["lat"]),
             "lon": float(row["lon"]),
             "elevation_m": float(row.get("elevation", 0)),

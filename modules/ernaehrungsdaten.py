@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Optional
 
@@ -11,6 +11,7 @@ PRODUCTS_FILE = Path("data") / "nutrition_products.json"
 
 
 BOTTLE_SIZES_ML = [500, 750, 950]
+DEFAULT_FLUID_RATE_ML_PER_HOUR = 500.0
 
 
 @dataclass
@@ -39,6 +40,7 @@ class Bottle:
 
     size_ml: int = 750
     brand: str = ""  # leer bedeutet: nur Wasser, kein Kohlenhydrat-Produkt
+    product_name: str = ""  # leer bedeutet: alle Drink-Produkte der Marke verwenden
 
 
 @dataclass
@@ -51,6 +53,7 @@ class NutritionEvent:
     label: str = ""
     lat: Optional[float] = None
     lon: Optional[float] = None
+    is_feed_zone: bool = False  # markiert eine Übergabe an einer Feedzone (für Hervorhebung)
 
 
 def load_products() -> list[NutritionProduct]:
@@ -150,7 +153,10 @@ def build_selected_products(
 
     for i, bottle in enumerate(bottles):
         if bottle.brand:
-            for p in get_products_by_brand(products, "drink", bottle.brand):
+            drink_products = get_products_by_brand(products, "drink", bottle.brand)
+            if bottle.product_name:
+                drink_products = [p for p in drink_products if p.name == bottle.product_name] or drink_products
+            for p in drink_products:
                 selected.append(scale_product_for_bottle(p, bottle.size_ml, bottle_index=i))
         else:
             selected.append(NutritionProduct(
@@ -164,65 +170,53 @@ def build_selected_products(
 def check_hydration_capacity(
     bottles: list[Bottle],
     target_time_h: float,
-    feed_zone_times_h: Optional[list[float]] = None,
-    min_ml_per_hour: float = 500.0,
+    feed_zones: Optional[list[dict]] = None,
+    min_ml_per_hour: float = DEFAULT_FLUID_RATE_ML_PER_HOUR,
 ) -> Optional[dict]:
     """
     Prüft, ob das mitgeführte Flaschenvolumen ausreicht, um im Schnitt
     mindestens `min_ml_per_hour` zu decken.
 
-    An jeder Feedzone werden die Flaschen als komplett aufgefüllt angenommen;
-    relevant ist deshalb nicht die Zielzeit insgesamt, sondern der längste
-    Abschnitt ohne Nachfüllen (Start → erste Feedzone → ... → Ziel). Sind
-    genug Feedzonen eng genug geplant, verschwindet der Warnhinweis.
+    `feed_zones` ist eine Liste von {"time_min": float, "bottles": list[Bottle]}
+    (die an dieser Feedzone tatsächlich übergebenen Flaschen). Relevant ist
+    nicht die Zielzeit insgesamt, sondern der schwächste Abschnitt zwischen
+    zwei Auffüllpunkten (Start → 1. Feedzone → ... → Ziel), wobei jeder
+    Abschnitt mit dem Volumen der zu Beginn dieses Abschnitts mitgeführten
+    Flaschen rechnet. Sind genug Feedzonen mit ausreichend Volumen geplant,
+    verschwindet der Warnhinweis.
 
     Gibt None zurück, wenn ausreichend, sonst die berechneten Werte für einen
     Warnhinweis.
     """
     if target_time_h <= 0 or not bottles:
         return None
-    total_ml = sum(b.size_ml for b in bottles)
 
-    checkpoints = sorted({0.0, target_time_h, *(feed_zone_times_h or [])})
-    segment_durations = [b - a for a, b in zip(checkpoints, checkpoints[1:])]
-    longest_segment_h = max(segment_durations) if segment_durations else target_time_h
+    zones = sorted((feed_zones or []), key=lambda z: z["time_min"])
+    checkpoints_min = [0.0] + [z["time_min"] for z in zones] + [target_time_h * 60.0]
+    capacities_ml = [sum(b.size_ml for b in bottles)] + [
+        sum(b.size_ml for b in z.get("bottles", [])) for z in zones
+    ]
 
-    ml_per_hour = total_ml / longest_segment_h if longest_segment_h > 0 else total_ml
-    if ml_per_hour >= min_ml_per_hour:
+    worst_ml_per_hour = None
+    worst_segment_h = 0.0
+    worst_capacity_ml = 0.0
+    for i in range(len(checkpoints_min) - 1):
+        duration_h = (checkpoints_min[i + 1] - checkpoints_min[i]) / 60.0
+        if duration_h <= 0:
+            continue
+        ml_per_hour = capacities_ml[i] / duration_h
+        if worst_ml_per_hour is None or ml_per_hour < worst_ml_per_hour:
+            worst_ml_per_hour = ml_per_hour
+            worst_segment_h = duration_h
+            worst_capacity_ml = capacities_ml[i]
+
+    if worst_ml_per_hour is None or worst_ml_per_hour >= min_ml_per_hour:
         return None
     return {
-        "total_ml": total_ml,
-        "ml_per_hour": round(ml_per_hour, 0),
+        "total_ml": worst_capacity_ml,
+        "ml_per_hour": round(worst_ml_per_hour, 0),
         "min_ml_per_hour": min_ml_per_hour,
-        "longest_segment_h": round(longest_segment_h, 2),
-    }
-
-
-def build_feed_zone_recommendation(
-    events: list[NutritionEvent],
-    start_time_min: float,
-    end_time_min: float,
-    bottles: list[Bottle],
-) -> dict:
-    """
-    Fasst zusammen, was einem Athleten an einer Feedzone übergeben werden sollte.
-
-    Nutzt die bereits geplanten Gel-Einnahmezeitpunkte: alle Gel-Events, deren
-    Zeit in das Zeitfenster bis zur nächsten Feedzone (oder dem Ziel) fällt,
-    werden als "hier übergeben" empfohlen. Zusätzlich wird an das Auffüllen
-    aller mitgeführten Flaschen erinnert.
-    """
-    gels_in_segment = [
-        e for e in events
-        if e.product.type == "gel" and start_time_min <= e.time_min < end_time_min
-    ]
-    gel_counts: dict[str, int] = {}
-    for e in gels_in_segment:
-        gel_counts[e.product.name] = gel_counts.get(e.product.name, 0) + 1
-    return {
-        "gel_counts": gel_counts,
-        "total_gels": len(gels_in_segment),
-        "bottles_to_refill": [f"{b.size_ml}ml {b.brand or 'Wasser'}" for b in bottles],
+        "longest_segment_h": round(worst_segment_h, 2),
     }
 
 
@@ -243,7 +237,8 @@ def calculate_nutrition_plan(
     target_time_h: float,
     carbs_per_hour: int,
     products: list[NutritionProduct],
-    hydration_interval_min: float = 30.0,
+    fluid_rate_ml_per_hour: float = DEFAULT_FLUID_RATE_ML_PER_HOUR,
+    feed_zones: Optional[list[dict]] = None,
 ) -> list[NutritionEvent]:
     """
     Berechnet einen Verpflegungsplan für ein Rennen.
@@ -253,65 +248,154 @@ def calculate_nutrition_plan(
     Drink-Mix-Produkte der Flaschen, die keine "Wasser"-Flaschen sind, plus
     Platzhalter-Wasser-Produkte für reine Trinkflaschen.
 
-    Es werden zwei unabhängige Zeitpläne berechnet und chronologisch
-    zusammengeführt: Kohlenhydrat-Produkte (Gel/Drink-Mix) werden so verteilt,
-    dass das Kohlenhydratziel (carbs_per_hour) möglichst genau erreicht wird;
-    reine Wasser-Flaschen bekommen unabhängig davon eine feste Erinnerung alle
-    `hydration_interval_min` Minuten, damit auch ohne Kohlenhydrat-Produkt ein
-    Trinkhinweis auf Karte/Höhenprofil erscheint. Erste Einnahme nach 20
-    Minuten, letzte Einnahme mindestens 10 Minuten vor dem Ziel.
+    `feed_zones` (optional) ist eine Liste von
+    {"time_min": float, "label": str, "bottle_products": list[NutritionProduct], "num_gels": int}
+    - die an einer Feedzone tatsächlich übergebenen Flaschen/Gels. Die dort
+    übergebenen Flaschen reihen sich chronologisch in den Flaschen-Zeitplan
+    ein (frühestens ab dem Feedzone-Zeitpunkt) und erzeugen zusätzlich einen
+    gelb hervorgehobenen "Feedzone"-Eintrag im Plan (is_feed_zone=True).
+
+    Flaschen werden nacheinander geleert statt parallel: Flasche 2 wird erst
+    ab dem Zeitpunkt aktiv, an dem Flasche 1 bei `fluid_rate_ml_per_hour`
+    rechnerisch leer wäre (Flaschenvolumen / Trinkrate) - bzw. ab einer
+    Feedzone, falls diese später liegt. Jede Flasche erzeugt genau einen
+    Eintrag - zu dem Zeitpunkt, an dem sie rechnerisch leer ist und zur
+    nächsten gewechselt werden sollte (nicht mehrere Teil-Portionen).
+
+    Die Kohlenhydrate aus einer aktiven Drink-Mix-Flasche werden bei der
+    Gel-Planung berücksichtigt und priorisiert: Gels füllen pro Zeitfenster
+    nur die Lücke zwischen der Ziel-KH-Rate (carbs_per_hour) und dem, was die
+    gerade aktive Flasche bereits liefert (Flaschen-KH / Flaschen-Dauer).
+    Liefert die Flasche bereits genug oder mehr, werden in diesem Zeitfenster
+    keine Gels eingeplant. Erste Gel-Einnahme nach 20 Minuten, letzte
+    mindestens 10 Minuten vor dem Ziel.
     """
     if not products or target_time_h <= 0:
         return []
 
-    carb_products = [p for p in products if p.carbs_g > 0]
-    water_products = [p for p in products if p.carbs_g <= 0]
     end_min = target_time_h * 60.0 - 10.0
+    raw: list[tuple[float, NutritionProduct, str, bool]] = []
 
-    raw: list[tuple[float, NutritionProduct, str]] = []
+    gel_products = [p for p in products if p.type == "gel"]
+    bottle_products: dict[int, list[NutritionProduct]] = {}
+    for p in products:
+        if p.type != "gel" and p.bottle_index is not None:
+            bottle_products.setdefault(p.bottle_index, []).append(p)
 
-    if carb_products:
-        avg_carbs = sum(p.carbs_g for p in carb_products) / len(carb_products)
-        interval_min = max(15.0, (avg_carbs / max(carbs_per_hour, 1)) * 60.0)
-        current_min = 20.0
-        idx = 0
-        gel_count = drink_count = 0
-        while current_min <= end_min:
-            product = carb_products[idx % len(carb_products)]
-            if product.type == "gel":
-                gel_count += 1
-                label = f"Gel{gel_count}"
+    # Flaschen-"Stufen" bauen: zuerst die Start-Flaschen, danach je Feedzone
+    # (in Zeitreihenfolge) deren übergebene Flaschen - jede Stufe darf
+    # frühestens ab ihrem eigenen Mindest-Startzeitpunkt aktiv werden.
+    stages: list[tuple[str, list[NutritionProduct], float]] = [
+        (f"F{bidx + 1}", bottle_products[bidx], 0.0) for bidx in sorted(bottle_products)
+    ]
+    for zone in sorted(feed_zones or [], key=lambda z: z["time_min"]):
+        zone_bottles: dict[int, list[NutritionProduct]] = {}
+        for p in zone.get("bottle_products", []):
+            if p.bottle_index is not None:
+                zone_bottles.setdefault(p.bottle_index, []).append(p)
+        for bidx in sorted(zone_bottles):
+            stages.append((f"{zone['label']}-F{bidx + 1}", zone_bottles[bidx], zone["time_min"]))
+        num_gels = zone.get("num_gels", 0)
+        handover_bits = []
+        if zone.get("bottle_products"):
+            handover_bits.append(f"{len(zone_bottles)} Flasche(n)")
+        if num_gels:
+            handover_bits.append(f"{num_gels} Gel(e)")
+        handover_product = NutritionProduct(
+            name=", ".join(handover_bits) or "Nachfüllen", type="feed_zone", carbs_g=0.0, brand=zone["label"],
+        )
+        raw.append((round(zone["time_min"], 1), handover_product, zone["label"], True))
+
+    # Flaschen-Zeitplan (sequentiell) aufbauen und dabei je Zeitfenster die
+    # KH-Rate merken, die die aktive Flasche liefert - für die Gel-Planung.
+    gel_segments: list[tuple[float, float, float]] = []  # (start, end, bottle_carbs_per_hour)
+    cursor_min = 20.0
+    for label_prefix, bottle_group, min_start in stages:
+        volume_ml = bottle_group[0].volume_ml or 500.0
+        duration_min = (volume_ml / fluid_rate_ml_per_hour) * 60.0
+        window_start = max(cursor_min, min_start)
+        natural_end = window_start + duration_min
+        window_end = min(natural_end, end_min)
+
+        if window_start <= end_min:
+            carb_items = [p for p in bottle_group if p.carbs_g > 0]
+            if carb_items:
+                template = carb_items[0]
+                total_carbs = sum(p.carbs_g for p in carb_items)
+                bottle_product = NutritionProduct(
+                    name=template.name if len(carb_items) == 1 else " + ".join(p.name for p in carb_items),
+                    type=template.type,
+                    carbs_g=total_carbs,
+                    caffeine_mg=sum(p.caffeine_mg for p in carb_items),
+                    brand=template.brand,
+                    volume_ml=template.volume_ml,
+                    bottle_index=template.bottle_index,
+                )
+                label = f"{label_prefix}-Drink"
+                duration_h = duration_min / 60.0
+                bottle_carbs_per_hour = total_carbs / duration_h if duration_h > 0 else 0.0
             else:
-                drink_count += 1
-                bottle_label = f"F{product.bottle_index + 1}-" if product.bottle_index is not None else ""
-                label = f"{bottle_label}Drink{drink_count}"
-            raw.append((round(current_min, 1), product, label))
-            current_min += interval_min
-            idx += 1
+                bottle_product = bottle_group[0]
+                label = f"{label_prefix}-Wasser"
+                bottle_carbs_per_hour = 0.0
+            # Wird die Flasche rechnerisch erst nach dem Ende des Plans leer,
+            # ist sie am Ziel noch nicht ganz ausgetrunken - der Eintrag zeigt
+            # dann "leer im Ziel" statt eines künstlich vorgezogenen Zeitpunkts,
+            # und vermerkt, wie viel davon bis dahin tatsächlich nötig ist
+            # (Hilfe bei der Wahl der Flaschengröße an der Feedzone).
+            if natural_end <= end_min:
+                event_time = window_end
+            else:
+                event_time = target_time_h * 60.0
+                available_min = max(0.0, event_time - window_start)
+                consumed_ml = min(volume_ml, fluid_rate_ml_per_hour * available_min / 60.0)
+                consumed_fraction = consumed_ml / volume_ml if volume_ml > 0 else 0.0
+                bottle_product = replace(
+                    bottle_product,
+                    name=f"{bottle_product.name}\n(nur ca. {consumed_ml:.0f} von {volume_ml:.0f} ml nötig)",
+                    carbs_g=round(bottle_product.carbs_g * consumed_fraction, 1),
+                    caffeine_mg=round(bottle_product.caffeine_mg * consumed_fraction, 1),
+                )
+            raw.append((round(event_time, 1), bottle_product, label, False))
+            gel_segments.append((window_start, window_end, bottle_carbs_per_hour))
 
-    if water_products:
-        current_min = 20.0
-        idx = 0
-        water_count = 0
-        while current_min <= end_min:
-            product = water_products[idx % len(water_products)]
-            water_count += 1
-            bottle_label = f"F{product.bottle_index + 1}-" if product.bottle_index is not None else ""
-            raw.append((round(current_min, 1), product, f"{bottle_label}Wasser{water_count}"))
-            current_min += hydration_interval_min
-            idx += 1
+        cursor_min = natural_end
+
+    # Zeitfenster ohne (weitere) Flasche: volle Ziel-KH-Rate muss aus Gels kommen.
+    tail_start = gel_segments[-1][1] if gel_segments else 20.0
+    if tail_start < end_min:
+        gel_segments.append((tail_start, end_min, 0.0))
+
+    if gel_products:
+        avg_gel_carbs = sum(p.carbs_g for p in gel_products) / len(gel_products)
+        t, idx, count = 20.0, 0, 0
+        for seg_start, seg_end, bottle_carbs_per_hour in gel_segments:
+            if t < seg_start:
+                t = seg_start
+            gel_carbs_per_hour_needed = max(0.0, carbs_per_hour - bottle_carbs_per_hour)
+            if gel_carbs_per_hour_needed <= 0:
+                t = seg_end
+                continue
+            interval_min = max(15.0, (avg_gel_carbs / gel_carbs_per_hour_needed) * 60.0)
+            while t <= seg_end and t <= end_min:
+                product = gel_products[idx % len(gel_products)]
+                count += 1
+                raw.append((round(t, 1), product, f"Gel{count}", False))
+                t += interval_min
+                idx += 1
 
     raw.sort(key=lambda item: item[0])
 
     events: list[NutritionEvent] = []
     cumulative = 0.0
-    for time_min, product, label in raw:
+    for time_min, product, label, is_feed_zone in raw:
         cumulative += product.carbs_g
         events.append(NutritionEvent(
             time_min=time_min,
             product=product,
             cumulative_carbs_g=round(cumulative, 1),
             label=label,
+            is_feed_zone=is_feed_zone,
         ))
 
     return events

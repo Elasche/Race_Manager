@@ -27,7 +27,6 @@ from modules.athletenverwaltung import (
 from modules.ernaehrungsdaten import (
     BOTTLE_SIZES_ML,
     Bottle,
-    build_feed_zone_recommendation,
     build_selected_products,
     calculate_nutrition_plan,
     check_hydration_capacity,
@@ -294,13 +293,14 @@ def _get_athlete_stats(athlete: Athlete) -> dict:
 
 
 def _current_bottles() -> list[Bottle]:
-    """Liest die konfigurierten Flaschen (Größe + Hersteller) aus dem Session-State."""
+    """Liest die konfigurierten Flaschen (Größe + Hersteller + Produktlinie) aus dem Session-State."""
     bottles = []
     for i in range(st.session_state.num_bottles):
         content = st.session_state.get(f"bottle_content_{i}", "Wasser")
         bottles.append(Bottle(
             size_ml=st.session_state.get(f"bottle_size_{i}", 750),
             brand="" if content == "Wasser" else content,
+            product_name=st.session_state.get(f"bottle_product_{i}", ""),
         ))
     return bottles
 
@@ -316,26 +316,51 @@ def _current_gel_product_name() -> str:
     return st.session_state.get("gel_product_choice", "")
 
 
-def _current_feed_zone_times_h(route_df: Optional[pd.DataFrame]) -> list[float]:
-    """
-    Wandelt die konfigurierten Feedzonen-Positionen (km) in Renndauer (h) um.
+def _current_feed_zone_bottles(i: int) -> list[Bottle]:
+    """Liest die an Feedzone i übergebenen Flaschen (Größe + Inhalt + Produktlinie) aus dem Session-State."""
+    bottles = []
+    for j in range(st.session_state.get(f"feedzone_num_bottles_{i}", 0)):
+        content = st.session_state.get(f"feedzone_bottle_content_{i}_{j}", "Wasser")
+        bottles.append(Bottle(
+            size_ml=st.session_state.get(f"feedzone_bottle_size_{i}_{j}", 750),
+            brand="" if content == "Wasser" else content,
+            product_name=st.session_state.get(f"feedzone_bottle_product_{i}_{j}", ""),
+        ))
+    return bottles
 
-    Wird u.a. für die Mindesthydrierungs-Prüfung gebraucht: an jeder Feedzone
-    gelten die Flaschen als aufgefüllt, relevant ist deshalb der längste
-    Abschnitt zwischen zwei Feedzonen (bzw. Start/Ziel), nicht die Zielzeit.
+
+def _build_feed_zone_plan_data(route_df: Optional[pd.DataFrame]) -> list[dict]:
+    """
+    Baut die Feedzonen-Daten (Zeitpunkt, übergebene Flaschen/Gele) für die
+    Verpflegungsplan-Berechnung und die Mindesthydrierungs-Prüfung.
     """
     num_zones = st.session_state.get("num_feed_zones", 0)
     if not num_zones or route_df is None or route_df.empty:
         return []
     total_km = calculate_route_metrics(route_df)["total_distance_km"]
     route_with_time = estimate_time_at_points(route_df, st.session_state.target_time_h)
-    return [
-        time_at_distance(route_with_time, float(min(st.session_state.get(f"feedzone_km_{i}", 0.0), total_km)))
-        for i in range(num_zones)
-    ]
+    catalog = load_products()
+
+    zones = []
+    for i in range(num_zones):
+        km = float(min(st.session_state.get(f"feedzone_km_{i}", 0.0), total_km))
+        time_min = time_at_distance(route_with_time, km) * 60.0
+        bottles = _current_feed_zone_bottles(i)
+        bottle_products = build_selected_products(catalog, bottles, gel_brand="") if bottles else []
+        zones.append({
+            "time_min": time_min,
+            "label": f"FZ{i + 1}",
+            "bottles": bottles,
+            "bottle_products": bottle_products,
+            "num_gels": st.session_state.get(f"feedzone_num_gels_{i}", 0),
+        })
+    zones.sort(key=lambda z: z["time_min"])
+    return zones
 
 
-def _build_nutrition_plan(route_df: Optional[pd.DataFrame] = None) -> tuple[list, list]:
+def _build_nutrition_plan(
+    route_df: Optional[pd.DataFrame] = None, feed_zones: Optional[list[dict]] = None,
+) -> tuple[list, list]:
     """
     Berechnet den Verpflegungsplan und ordnet ihn der Strecke zu.
 
@@ -349,6 +374,7 @@ def _build_nutrition_plan(route_df: Optional[pd.DataFrame] = None) -> tuple[list
         target_time_h=st.session_state.target_time_h,
         carbs_per_hour=st.session_state.carbs_per_hour,
         products=selected_products,
+        feed_zones=feed_zones if feed_zones is not None else _build_feed_zone_plan_data(route_df),
     )
     points: list[dict] = []
     if route_df is not None and not route_df.empty:
@@ -466,10 +492,13 @@ def _export_pdf(
         for p in nutrition_points:
             total_min = int(p["time_min"])
             hh, mm = divmod(total_min, 60)
-            pdf.cell(col_w[0], 6, f"{hh:02d}:{mm:02d}", border=1)
-            pdf.cell(col_w[1], 6, _pdf_safe(p["product_name"])[:38], border=1)
-            pdf.cell(col_w[2], 6, str(int(p["carbs_g"])), border=1)
-            pdf.cell(col_w[3], 6, str(int(p["cumulative_carbs_g"])), border=1)
+            is_fz = bool(p.get("is_feed_zone"))
+            if is_fz:
+                pdf.set_fill_color(254, 249, 195)
+            pdf.cell(col_w[0], 6, f"{hh:02d}:{mm:02d}", border=1, fill=is_fz)
+            pdf.cell(col_w[1], 6, _pdf_safe(p["product_name"])[:38], border=1, fill=is_fz)
+            pdf.cell(col_w[2], 6, str(int(p["carbs_g"])), border=1, fill=is_fz)
+            pdf.cell(col_w[3], 6, str(int(p["cumulative_carbs_g"])), border=1, fill=is_fz)
             pdf.ln()
 
     pdf.ln(6)
@@ -488,7 +517,8 @@ def _export_pdf(
         pdf.set_text_color(0, 0, 0)
         pdf.ln(2)
 
-        fig_vertical = create_elevation_profile_vertical(route_df, nutrition_points)
+        pdf_map_points = [p for p in nutrition_points if not p.get("is_feed_zone")]
+        fig_vertical = create_elevation_profile_vertical(route_df, pdf_map_points)
         png_bytes = fig_vertical.to_image(format="png")
 
         img_w_mm = 80.0
@@ -668,17 +698,31 @@ with col_left:
             st.caption(f"📍 {m['total_distance_km']} km · ⬆ {m['elevation_gain_m']:.0f}m · ⬇ {m['elevation_loss_m']:.0f}m")
 
         st.markdown("**Zielzeit anpassen**")
-        st.session_state.target_time_h = st.slider(
-            "Zielzeit (h)",
-            min_value=0.5,
-            max_value=12.0,
-            value=float(st.session_state.target_time_h),
-            step=0.25,
-            format="%.2f h",
-            label_visibility="collapsed",
+        # Wenn sich target_time_h von außen ändert (z.B. durch Streckenwahl),
+        # müssen die Stunden/Minuten-Felder darauf synchronisiert werden -
+        # sie haben eigene Keys und würden sonst den alten Wert behalten.
+        if st.session_state.get("_target_time_h_synced") != st.session_state.target_time_h:
+            total_minutes = round(st.session_state.target_time_h * 60)
+            st.session_state.target_time_hours_input = min(12, total_minutes // 60)
+            st.session_state.target_time_minutes_input = total_minutes % 60
+
+        h_col, m_col = st.columns(2)
+        with h_col:
+            st.number_input(
+                "Stunden", min_value=0, max_value=12, step=1, key="target_time_hours_input",
+            )
+        with m_col:
+            st.number_input(
+                "Minuten", min_value=0, max_value=59, step=5, key="target_time_minutes_input",
+            )
+
+        st.session_state.target_time_h = (
+            st.session_state.target_time_hours_input + st.session_state.target_time_minutes_input / 60.0
         )
+        st.session_state["_target_time_h_synced"] = st.session_state.target_time_h
+
         th = int(st.session_state.target_time_h)
-        tm = int((st.session_state.target_time_h % 1) * 60)
+        tm = int(round((st.session_state.target_time_h % 1) * 60))
         st.caption(f"Zielzeit: **{th}h {tm:02d}min**")
 
     route_df = st.session_state.route_df
@@ -732,6 +776,23 @@ with col_left:
                     index=content_options.index(content_val) if content_val in content_options else 0,
                     key=f"bottle_content_{i}",
                 )
+
+            chosen_bottle_brand = "" if st.session_state[f"bottle_content_{i}"] == "Wasser" else st.session_state[f"bottle_content_{i}"]
+            if chosen_bottle_brand:
+                drink_product_options = [
+                    p.name for p in get_products_by_brand(nutrition_catalog, "drink", chosen_bottle_brand)
+                ]
+                if len(drink_product_options) > 1:
+                    product_val = st.session_state.get(f"bottle_product_{i}", "")
+                    st.selectbox(
+                        "Produktlinie", drink_product_options,
+                        index=drink_product_options.index(product_val) if product_val in drink_product_options else 0,
+                        key=f"bottle_product_{i}",
+                    )
+                else:
+                    st.session_state[f"bottle_product_{i}"] = ""
+            else:
+                st.session_state[f"bottle_product_{i}"] = ""
         st.markdown("**Gels**")
         gel_options = ["Keine Gels"] + gel_brand_options
         gel_val = st.session_state.get("gel_brand_choice", "Keine Gels")
@@ -764,21 +825,26 @@ with col_left:
     st.markdown("---")
 
     athlete = _selected_athlete()
-    nutrition_events, nutrition_points = _build_nutrition_plan(route_df)
+    feed_zones_data = _build_feed_zone_plan_data(route_df)
+    nutrition_events, nutrition_points = _build_nutrition_plan(route_df, feed_zones=feed_zones_data)
 
     hydration_issue = check_hydration_capacity(
-        _current_bottles(), st.session_state.target_time_h, _current_feed_zone_times_h(route_df),
+        _current_bottles(), st.session_state.target_time_h,
+        [{"time_min": z["time_min"], "bottles": z["bottles"]} for z in feed_zones_data],
     )
     if hydration_issue:
         st.warning(
-            f"💧 Deine Flaschen fassen zusammen {hydration_issue['total_ml']:.0f} ml – ohne Nachfüllen reicht das "
-            f"für {hydration_issue['longest_segment_h']:.2f}h nur für {hydration_issue['ml_per_hour']:.0f} ml/h, "
-            f"empfohlen sind mind. {hydration_issue['min_ml_per_hour']:.0f} ml/h. Größere/mehr Flaschen wählen "
-            "oder unten eine (weitere) Feedzone zum Nachfüllen einplanen."
+            f"💧 Im schwächsten Abschnitt ohne Nachfüllen ({hydration_issue['longest_segment_h']:.2f}h) stehen nur "
+            f"{hydration_issue['total_ml']:.0f} ml zur Verfügung – das sind nur {hydration_issue['ml_per_hour']:.0f} "
+            f"ml/h, empfohlen sind mind. {hydration_issue['min_ml_per_hour']:.0f} ml/h. Größere/mehr Flaschen wählen "
+            "oder unten eine (weitere) Feedzone mit mehr Flaschen einplanen."
         )
 
     st.markdown('<div class="section-label">Feedzonen</div>', unsafe_allow_html=True)
-    with st.expander("Feedzonen einstellen"):
+    # Bleibt offen, solange Feedzonen konfiguriert sind - sonst klappt der
+    # Expander bei jeder neuen Flaschen-/Gel-Auswahl (strukturelle Änderung
+    # der enthaltenen Widgets) unerwartet wieder zu.
+    with st.expander("Feedzonen einstellen", expanded=st.session_state.num_feed_zones > 0):
         minus_col, count_col, plus_col = st.columns([1, 2, 1])
         with minus_col:
             minus_clicked = st.button(
@@ -806,7 +872,7 @@ with col_left:
                 st.caption("Bitte zuerst eine Strecke auswählen, um Feedzonen zu platzieren.")
             else:
                 total_km = calculate_route_metrics(route_df)["total_distance_km"]
-                route_with_time_fz = estimate_time_at_points(route_df, st.session_state.target_time_h)
+                drink_brand_options_fz = get_brands_by_type(nutrition_catalog, "drink")
 
                 for i in range(st.session_state.num_feed_zones):
                     zone_key = f"feedzone_km_{i}"
@@ -815,15 +881,6 @@ with col_left:
                             total_km * (i + 1) / (st.session_state.num_feed_zones + 1), 1
                         )
 
-                zone_kms = [
-                    float(min(st.session_state[f"feedzone_km_{i}"], total_km))
-                    for i in range(st.session_state.num_feed_zones)
-                ]
-                sorted_kms = sorted(zone_kms)
-                boundaries_km = sorted_kms[1:] + [total_km]
-                boundary_for_km = dict(zip(sorted_kms, boundaries_km))
-                bottles_now = _current_bottles()
-
                 st.markdown("---")
                 for i in range(st.session_state.num_feed_zones):
                     zone_key = f"feedzone_km_{i}"
@@ -831,25 +888,70 @@ with col_left:
                     st.number_input(
                         "Position (km)",
                         min_value=0.0, max_value=float(total_km),
-                        value=zone_kms[i],
+                        value=float(min(st.session_state[zone_key], total_km)),
                         step=10.0, key=zone_key,
                     )
-                    km = float(min(st.session_state[zone_key], total_km))
-                    next_km = boundary_for_km.get(km, total_km)
-                    start_min = time_at_distance(route_with_time_fz, km) * 60.0
-                    end_min = (
-                        time_at_distance(route_with_time_fz, next_km) * 60.0
-                        if next_km < total_km
-                        else st.session_state.target_time_h * 60.0
+
+                    num_bottles_key = f"feedzone_num_bottles_{i}"
+                    num_bottles_val = st.session_state.get(num_bottles_key, 0)
+                    st.radio(
+                        "Flaschen übergeben", [0, 1, 2],
+                        index=[0, 1, 2].index(num_bottles_val) if num_bottles_val in (0, 1, 2) else 0,
+                        key=num_bottles_key, horizontal=True,
                     )
-                    rec = build_feed_zone_recommendation(nutrition_events, start_min, end_min, bottles_now)
-                    bottle_txt = ", ".join(rec["bottles_to_refill"]) or "–"
-                    st.caption(f"🍼 Flaschen auffüllen: {bottle_txt}")
-                    if rec["gel_counts"]:
-                        gel_txt = ", ".join(f"{n}× {name}" for name, n in rec["gel_counts"].items())
-                        st.caption(f"🍬 Gele übergeben: {gel_txt}")
-                    else:
-                        st.caption("🍬 Keine weiteren Gele für diesen Abschnitt geplant.")
+
+                    for j in range(st.session_state[num_bottles_key]):
+                        size_key = f"feedzone_bottle_size_{i}_{j}"
+                        content_key = f"feedzone_bottle_content_{i}_{j}"
+                        size_val = st.session_state.get(size_key, 750)
+                        content_options = ["Wasser"] + drink_brand_options_fz
+                        content_val = st.session_state.get(content_key, "Wasser")
+
+                        size_col, content_col = st.columns(2)
+                        with size_col:
+                            st.selectbox(
+                                f"Flasche {j + 1} – Größe", BOTTLE_SIZES_ML,
+                                index=BOTTLE_SIZES_ML.index(size_val) if size_val in BOTTLE_SIZES_ML else 1,
+                                format_func=lambda ml: f"{ml} ml",
+                                key=size_key,
+                            )
+                        with content_col:
+                            st.selectbox(
+                                f"Flasche {j + 1} – Inhalt", content_options,
+                                index=content_options.index(content_val) if content_val in content_options else 0,
+                                key=content_key,
+                            )
+
+                        product_key = f"feedzone_bottle_product_{i}_{j}"
+                        chosen_fz_brand = "" if st.session_state[content_key] == "Wasser" else st.session_state[content_key]
+                        if chosen_fz_brand:
+                            fz_drink_product_options = [
+                                p.name for p in get_products_by_brand(nutrition_catalog, "drink", chosen_fz_brand)
+                            ]
+                            if len(fz_drink_product_options) > 1:
+                                product_val = st.session_state.get(product_key, "")
+                                st.selectbox(
+                                    f"Flasche {j + 1} – Produktlinie", fz_drink_product_options,
+                                    index=fz_drink_product_options.index(product_val) if product_val in fz_drink_product_options else 0,
+                                    key=product_key,
+                                )
+                            else:
+                                st.session_state[product_key] = ""
+                        else:
+                            st.session_state[product_key] = ""
+
+                    gels_key = f"feedzone_num_gels_{i}"
+                    st.number_input(
+                        "Gele übergeben", min_value=0, max_value=10, step=1, key=gels_key,
+                        value=st.session_state.get(gels_key, 0),
+                    )
+
+                    bottles_summary = ", ".join(
+                        f"{st.session_state.get(f'feedzone_bottle_size_{i}_{j}', 750)}ml "
+                        f"{st.session_state.get(f'feedzone_bottle_content_{i}_{j}', 'Wasser')}"
+                        for j in range(st.session_state[num_bottles_key])
+                    ) or "keine"
+                    st.caption(f"🍼 Flaschen: {bottles_summary} · 🍬 Gele: {st.session_state[gels_key]}")
 
     if nutrition_points or (route_df is not None):
         pdf_bytes = _export_pdf(
@@ -879,17 +981,19 @@ with col_mid:
         route_with_time = estimate_time_at_points(route_df, st.session_state.target_time_h)
         key_features = detect_key_features(route_df)
 
-        fig_map = create_route_map(route_with_time, nutrition_points, key_features)
+        # Feedzonen-Übergaben erscheinen nur in der Tabelle (gelb hervorgehoben),
+        # nicht als eigener Marker auf Karte/Höhenprofil.
+        map_points = [p for p in nutrition_points if not p.get("is_feed_zone")]
+
+        fig_map = create_route_map(route_with_time, map_points, key_features)
         st.plotly_chart(fig_map, width="stretch", config={"scrollZoom": True})
 
-        fig_elev = create_elevation_profile(route_df, nutrition_points)
+        fig_elev = create_elevation_profile(route_df, map_points)
         st.plotly_chart(fig_elev, width="stretch")
 
         st.markdown('<div class="section-label">Verpflegungsplan</div>', unsafe_allow_html=True)
-        df_table = create_nutrition_table(nutrition_points)
-        if not df_table.empty:
-            table_height = 38 * (len(df_table) + 1) + 40
-            st.dataframe(df_table, use_container_width=True, hide_index=True, height=table_height)
+        if nutrition_points:
+            st.markdown(create_nutrition_table(nutrition_points), unsafe_allow_html=True)
         else:
             st.caption("Kein Plan – bitte Strecke und Athlet auswählen.")
     else:

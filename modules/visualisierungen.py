@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import html
 import math
 from typing import Optional
 
@@ -12,17 +13,9 @@ from modules.trainingsanalys import POWER_CURVE_DURATIONS
 
 ROUTE_COLOR = "#7C3AED"
 GEL_COLOR = "#FFD600"
-DRINK_COLOR = "#16a34a"
+DRINK_COLOR = "#FC4C02"  # einheitliches Strava-Orange für alle Flaschen
 FOOD_COLOR = "#f59e0b"
 CLIMB_COLOR = "#ef4444"
-BOTTLE_COLORS = ["#2563EB", "#db2777"]  # Flasche 1, Flasche 2
-
-
-def _drink_color(bottle_index: Optional[int]) -> str:
-    """Gibt die Flaschen-Farbe für ein Drink-Event zurück (Fallback: generisches Grün)."""
-    if bottle_index is None:
-        return DRINK_COLOR
-    return BOTTLE_COLORS[bottle_index % len(BOTTLE_COLORS)]
 
 
 def _zoom_to_fit_bounds(
@@ -65,8 +58,9 @@ def create_route_map(
     """
     Erstellt eine interaktive Kartenansicht der Strecke.
 
-    Zeigt die Route als farbige Linie sowie Verpflegungspunkte (Gels schwarz,
-    Drinks grün) und erkannte Anstiege (rot) als Marker. Unterstützt Zoom und Pan.
+    Zeigt die Route als farbige Linie sowie Verpflegungspunkte (Gels gelb,
+    Drinks je Flasche eingefärbt) und erkannte Anstiege (rot) als Marker.
+    Unterstützt Zoom und Pan.
     """
     fig = go.Figure()
 
@@ -92,11 +86,21 @@ def create_route_map(
     ))
 
     def _add_nutrition_trace(group: list[dict], color: str, label: str) -> None:
+        # Scattermapbox-Marker unterstützen keinen "line"-Rahmen; ein leicht
+        # größerer weißer Kreis darunter erzeugt einen pin-artigen Ring-Look.
+        fig.add_trace(go.Scattermapbox(
+            lat=[p["lat"] for p in group],
+            lon=[p["lon"] for p in group],
+            mode="markers",
+            marker=dict(size=22, color="#FFFFFF"),
+            hoverinfo="skip",
+            showlegend=False,
+        ))
         fig.add_trace(go.Scattermapbox(
             lat=[p["lat"] for p in group],
             lon=[p["lon"] for p in group],
             mode="markers+text",
-            marker=dict(size=14, color=color),
+            marker=dict(size=17, color=color),
             text=[p["label"] for p in group],
             textposition="top right",
             textfont=dict(size=12, color=color),
@@ -120,15 +124,8 @@ def create_route_map(
             _add_nutrition_trace(gels, GEL_COLOR, "Gel")
         if foods:
             _add_nutrition_trace(foods, FOOD_COLOR, "Riegel")
-
-        bottle_indices = sorted({p["bottle_index"] for p in drinks if p.get("bottle_index") is not None})
-        for bi in bottle_indices:
-            group = [p for p in drinks if p.get("bottle_index") == bi]
-            _add_nutrition_trace(group, _drink_color(bi), f"Flasche {bi + 1}")
-
-        unassigned_drinks = [p for p in drinks if p.get("bottle_index") is None]
-        if unassigned_drinks:
-            _add_nutrition_trace(unassigned_drinks, DRINK_COLOR, "Drink")
+        if drinks:
+            _add_nutrition_trace(drinks, DRINK_COLOR, "Flasche")
 
     if key_features:
         climbs = [f for f in key_features if f.get("type") == "climb"]
@@ -199,7 +196,7 @@ def create_elevation_profile(
     if nutrition_points:
         for p in nutrition_points:
             if p.get("type") == "drink":
-                color = _drink_color(p.get("bottle_index"))
+                color = DRINK_COLOR
             elif p.get("type") == "food":
                 color = FOOD_COLOR
             else:
@@ -258,7 +255,7 @@ def create_elevation_profile_vertical(
     if nutrition_points:
         for p in nutrition_points:
             if p.get("type") == "drink":
-                color = _drink_color(p.get("bottle_index"))
+                color = DRINK_COLOR
             elif p.get("type") == "food":
                 color = FOOD_COLOR
             else:
@@ -314,8 +311,8 @@ def create_power_curve(power_curve: dict[str, float], ftp: Optional[float] = Non
     fig.add_trace(go.Scatter(
         x=labels, y=values,
         mode="lines+markers",
-        line=dict(color=DRINK_COLOR, width=2),
-        marker=dict(size=5, color=DRINK_COLOR),
+        line=dict(color="#16a34a", width=2),
+        marker=dict(size=5, color="#16a34a"),
         fill="tozeroy",
         fillcolor="rgba(22, 163, 74, 0.12)",
         hovertemplate="%{x}: <b>%{y:.0f}W</b><extra></extra>",
@@ -340,25 +337,53 @@ def create_power_curve(power_curve: dict[str, float], ftp: Optional[float] = Non
     return fig
 
 
-def create_nutrition_table(nutrition_points: list[dict]) -> pd.DataFrame:
+def create_nutrition_table(nutrition_points: list[dict]) -> str:
     """
-    Erstellt einen formatierten DataFrame für die Verpflegungstabelle.
+    Erstellt eine formatierte Verpflegungstabelle (Zeit, Produkt, Kohlenhydrate,
+    Gesamtsumme) als HTML-Tabelle. Feedzonen-Übergaben werden gelb hervorgehoben.
 
-    Enthält geplante Zeit (HH:MM), Produkt, Kohlenhydrate und Gesamtsumme.
+    Als HTML statt st.dataframe gerendert, damit mehrzeilige Hinweise (z.B.
+    "nur ca. X von Y ml nötig") per <br> umgebrochen werden können - das
+    Standard-st.dataframe unterstützt keine Zeilenumbrüche innerhalb einer
+    Zelle - und die Tabelle sich exakt an ihren Inhalt anpasst, ohne
+    überschüssige leere Zeile am Ende.
     """
     if not nutrition_points:
-        return pd.DataFrame(columns=["Time", "Flasche", "Nutrition", "KH (g)", "KH gesamt (g)"])
+        return ""
 
-    rows = []
+    header_cells = "".join(
+        f'<th style="text-align:left; padding:8px 10px; border-bottom:2px solid #E5E7EB; '
+        f'color:#6B7280; font-size:0.8rem; text-transform:uppercase;">{label}</th>'
+        for label in ["Time", "Flasche", "Nutrition", "KH (g)", "KH gesamt (g)"]
+    )
+
+    body_rows = []
     for p in nutrition_points:
         total_min = int(p["time_min"])
         h, m = divmod(total_min, 60)
         bottle_index = p.get("bottle_index")
-        rows.append({
-            "Time": f"{h:02d}:{m:02d}",
-            "Flasche": f"F{bottle_index + 1}" if bottle_index is not None else "–",
-            "Nutrition": p["product_name"],
-            "KH (g)": int(p["carbs_g"]),
-            "KH gesamt (g)": int(p["cumulative_carbs_g"]),
-        })
-    return pd.DataFrame(rows)
+        is_fz = bool(p.get("is_feed_zone"))
+        flasche = p["label"] if is_fz else (f"F{bottle_index + 1}" if bottle_index is not None else "–")
+        nutrition_html = html.escape(p["product_name"]).replace("\n", "<br>")
+
+        cells = [
+            f"{h:02d}:{m:02d}",
+            html.escape(str(flasche)),
+            nutrition_html,
+            str(int(p["carbs_g"])),
+            str(int(p["cumulative_carbs_g"])),
+        ]
+        row_style = "background-color:#FEF9C3;" if is_fz else ""
+        cell_html = "".join(
+            f'<td style="padding:8px 10px; border-bottom:1px solid #E5E7EB;">{c}</td>' for c in cells
+        )
+        body_rows.append(f'<tr style="{row_style}">{cell_html}</tr>')
+
+    return (
+        '<div style="max-height:520px; overflow-y:auto;">'
+        '<table style="width:100%; border-collapse:collapse; font-size:0.9rem;">'
+        f"<thead><tr>{header_cells}</tr></thead>"
+        f"<tbody>{''.join(body_rows)}</tbody>"
+        "</table></div>"
+    )
+
