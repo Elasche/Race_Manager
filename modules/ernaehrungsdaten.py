@@ -12,6 +12,7 @@ PRODUCTS_FILE = Path("data") / "nutrition_products.json"
 
 BOTTLE_SIZES_ML = [500, 750, 950]
 DEFAULT_FLUID_RATE_ML_PER_HOUR = 500.0
+NUTRITION_START_DELAY_MIN = 20.0  # keine Verpflegung direkt ab Minute 0 nötig (Anfahrphase)
 
 
 @dataclass
@@ -174,41 +175,47 @@ def check_hydration_capacity(
     min_ml_per_hour: float = DEFAULT_FLUID_RATE_ML_PER_HOUR,
 ) -> Optional[dict]:
     """
-    Prüft, ob das mitgeführte Flaschenvolumen ausreicht, um im Schnitt
-    mindestens `min_ml_per_hour` zu decken.
+    Prüft, ob das mitgeführte + an Feedzonen nachgefüllte Flüssigkeitsvolumen
+    kumulativ ausreicht, um durchgängig mindestens `min_ml_per_hour` zu decken.
 
     `feed_zones` ist eine Liste von {"time_min": float, "bottles": list[Bottle]}
-    (die an dieser Feedzone tatsächlich übergebenen Flaschen). Relevant ist
-    nicht die Zielzeit insgesamt, sondern der schwächste Abschnitt zwischen
-    zwei Auffüllpunkten (Start → 1. Feedzone → ... → Ziel), wobei jeder
-    Abschnitt mit dem Volumen der zu Beginn dieses Abschnitts mitgeführten
-    Flaschen rechnet. Sind genug Feedzonen mit ausreichend Volumen geplant,
-    verschwindet der Warnhinweis.
+    (die an dieser Feedzone tatsächlich übergebenen Flaschen). Geprüft wird an
+    jedem Checkpoint (jede Feedzone-Ankunft sowie das Ziel), ob die BIS DAHIN
+    insgesamt erhaltene Menge (Startflaschen + alle bisherigen Feedzonen) für
+    die bis dahin verstrichene Zeit reicht - nicht wie zuvor ein Reset auf 0
+    bei jeder Feedzone. So wird Restvolumen aus einer beim Erreichen der
+    Feedzone noch nicht leeren Flasche korrekt mitgezählt, statt fälschlich
+    zu verschwinden.
 
-    Gibt None zurück, wenn ausreichend, sonst die berechneten Werte für einen
-    Warnhinweis.
+    Gibt None zurück, wenn ausreichend, sonst die Werte für den kritischsten
+    Checkpoint für einen Warnhinweis.
     """
     if target_time_h <= 0 or not bottles:
         return None
 
     zones = sorted((feed_zones or []), key=lambda z: z["time_min"])
-    checkpoints_min = [0.0] + [z["time_min"] for z in zones] + [target_time_h * 60.0]
+    checkpoints_min = [z["time_min"] for z in zones] + [target_time_h * 60.0]
     capacities_ml = [sum(b.size_ml for b in bottles)] + [
         sum(b.size_ml for b in z.get("bottles", [])) for z in zones
     ]
 
     worst_ml_per_hour = None
-    worst_segment_h = 0.0
+    worst_checkpoint_h = 0.0
     worst_capacity_ml = 0.0
-    for i in range(len(checkpoints_min) - 1):
-        duration_h = (checkpoints_min[i + 1] - checkpoints_min[i]) / 60.0
-        if duration_h <= 0:
+    cumulative_ml = 0.0
+    for checkpoint_min, capacity_ml in zip(checkpoints_min, capacities_ml):
+        cumulative_ml += capacity_ml
+        # Wie im Verpflegungsplan startet der tatsächliche Flüssigkeitsbedarf
+        # erst nach der Anfahrphase (NUTRITION_START_DELAY_MIN), nicht ab
+        # Minute 0 - sonst wäre die Prüfung strenger als der Plan selbst.
+        active_min = checkpoint_min - NUTRITION_START_DELAY_MIN
+        if active_min <= 0:
             continue
-        ml_per_hour = capacities_ml[i] / duration_h
+        ml_per_hour = cumulative_ml / (active_min / 60.0)
         if worst_ml_per_hour is None or ml_per_hour < worst_ml_per_hour:
             worst_ml_per_hour = ml_per_hour
-            worst_segment_h = duration_h
-            worst_capacity_ml = capacities_ml[i]
+            worst_checkpoint_h = checkpoint_min / 60.0
+            worst_capacity_ml = cumulative_ml
 
     if worst_ml_per_hour is None or worst_ml_per_hour >= min_ml_per_hour:
         return None
@@ -216,7 +223,7 @@ def check_hydration_capacity(
         "total_ml": worst_capacity_ml,
         "ml_per_hour": round(worst_ml_per_hour, 0),
         "min_ml_per_hour": min_ml_per_hour,
-        "longest_segment_h": round(worst_segment_h, 2),
+        "longest_segment_h": round(worst_checkpoint_h, 2),
     }
 
 
@@ -309,7 +316,7 @@ def calculate_nutrition_plan(
     # Flaschen-Zeitplan (sequentiell) aufbauen und dabei je Zeitfenster die
     # KH-Rate merken, die die aktive Flasche liefert - für die Gel-Planung.
     gel_segments: list[tuple[float, float, float]] = []  # (start, end, bottle_carbs_per_hour)
-    cursor_min = 20.0
+    cursor_min = NUTRITION_START_DELAY_MIN
     for label_prefix, bottle_group, min_start in stages:
         volume_ml = bottle_group[0].volume_ml or 500.0
         duration_min = (volume_ml / fluid_rate_ml_per_hour) * 60.0
@@ -362,13 +369,13 @@ def calculate_nutrition_plan(
         cursor_min = natural_end
 
     # Zeitfenster ohne (weitere) Flasche: volle Ziel-KH-Rate muss aus Gels kommen.
-    tail_start = gel_segments[-1][1] if gel_segments else 20.0
+    tail_start = gel_segments[-1][1] if gel_segments else NUTRITION_START_DELAY_MIN
     if tail_start < end_min:
         gel_segments.append((tail_start, end_min, 0.0))
 
     if gel_products:
         avg_gel_carbs = sum(p.carbs_g for p in gel_products) / len(gel_products)
-        t, idx, count = 20.0, 0, 0
+        t, idx, count = NUTRITION_START_DELAY_MIN, 0, 0
         for seg_start, seg_end, bottle_carbs_per_hour in gel_segments:
             if t < seg_start:
                 t = seg_start

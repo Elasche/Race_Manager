@@ -517,8 +517,7 @@ def _export_pdf(
         pdf.set_text_color(0, 0, 0)
         pdf.ln(2)
 
-        pdf_map_points = [p for p in nutrition_points if not p.get("is_feed_zone")]
-        fig_vertical = create_elevation_profile_vertical(route_df, pdf_map_points)
+        fig_vertical = create_elevation_profile_vertical(route_df, nutrition_points)
         png_bytes = fig_vertical.to_image(format="png")
 
         img_w_mm = 80.0
@@ -834,10 +833,10 @@ with col_left:
     )
     if hydration_issue:
         st.warning(
-            f"💧 Im schwächsten Abschnitt ohne Nachfüllen ({hydration_issue['longest_segment_h']:.2f}h) stehen nur "
-            f"{hydration_issue['total_ml']:.0f} ml zur Verfügung – das sind nur {hydration_issue['ml_per_hour']:.0f} "
-            f"ml/h, empfohlen sind mind. {hydration_issue['min_ml_per_hour']:.0f} ml/h. Größere/mehr Flaschen wählen "
-            "oder unten eine (weitere) Feedzone mit mehr Flaschen einplanen."
+            f"💧 Bis {hydration_issue['longest_segment_h']:.2f}h ins Rennen stehen dir inklusive aller Feedzonen "
+            f"bis dahin insgesamt nur {hydration_issue['total_ml']:.0f} ml zur Verfügung – im Schnitt nur "
+            f"{hydration_issue['ml_per_hour']:.0f} ml/h, empfohlen sind mind. {hydration_issue['min_ml_per_hour']:.0f} "
+            "ml/h. Größere/mehr Flaschen wählen oder unten eine (weitere) Feedzone mit mehr Volumen einplanen."
         )
 
     st.markdown('<div class="section-label">Feedzonen</div>', unsafe_allow_html=True)
@@ -981,14 +980,15 @@ with col_mid:
         route_with_time = estimate_time_at_points(route_df, st.session_state.target_time_h)
         key_features = detect_key_features(route_df)
 
-        # Feedzonen-Übergaben erscheinen nur in der Tabelle (gelb hervorgehoben),
-        # nicht als eigener Marker auf Karte/Höhenprofil.
+        # Feedzonen-Übergaben erscheinen nicht als eigener Punkt auf der Karte
+        # (dort gibt es schon Flaschen-/Gel-Marker), aber im Höhenprofil als
+        # eigene markierte Linie sowie in der Tabelle (gelb hervorgehoben).
         map_points = [p for p in nutrition_points if not p.get("is_feed_zone")]
 
         fig_map = create_route_map(route_with_time, map_points, key_features)
         st.plotly_chart(fig_map, width="stretch", config={"scrollZoom": True})
 
-        fig_elev = create_elevation_profile(route_df, map_points)
+        fig_elev = create_elevation_profile(route_df, nutrition_points)
         st.plotly_chart(fig_elev, width="stretch")
 
         st.markdown('<div class="section-label">Verpflegungsplan</div>', unsafe_allow_html=True)

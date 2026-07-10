@@ -16,6 +16,7 @@ GEL_COLOR = "#FFD600"
 DRINK_COLOR = "#FC4C02"  # einheitliches Strava-Orange für alle Flaschen
 FOOD_COLOR = "#f59e0b"
 CLIMB_COLOR = "#ef4444"
+FEED_ZONE_COLOR = "#0EA5E9"
 
 
 def _zoom_to_fit_bounds(
@@ -195,7 +196,9 @@ def create_elevation_profile(
 
     if nutrition_points:
         for p in nutrition_points:
-            if p.get("type") == "drink":
+            if p.get("type") == "feed_zone":
+                color = FEED_ZONE_COLOR
+            elif p.get("type") == "drink":
                 color = DRINK_COLOR
             elif p.get("type") == "food":
                 color = FOOD_COLOR
@@ -254,7 +257,9 @@ def create_elevation_profile_vertical(
 
     if nutrition_points:
         for p in nutrition_points:
-            if p.get("type") == "drink":
+            if p.get("type") == "feed_zone":
+                color = FEED_ZONE_COLOR
+            elif p.get("type") == "drink":
                 color = DRINK_COLOR
             elif p.get("type") == "food":
                 color = FOOD_COLOR
