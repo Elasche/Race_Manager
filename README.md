@@ -4,14 +4,14 @@ Ein Streamlit-Dashboard zur Renn- und Verpflegungsplanung für MTB-Marathons und
 
 ## Features
 
-- **Athletenverwaltung** – Athleten anlegen/bearbeiten/löschen, Foto, Gewicht, Geburtsjahr, Standard-Kohlenhydratrate
-- **Trainingsdaten-Analyse** – Import von `.csv`, `.fit`, `.gpx` sowie gzip-komprimierten Strava-Exports (`.fit.gz`, `.gpx.gz`); automatische Berechnung von FTP, maximaler Herzfrequenz und Leistungskurve (Mean Maximal Power über alle Trainingsdateien kombiniert)
-- **Streckenverwaltung** – GPX/CSV-Strecken hochladen, speichern und wiederverwenden; automatische Höhenprofil-, Distanz- und Höhenmeter-Berechnung
-- **Zielzeit-Kalkulation** – Geschwindigkeitsvorschlag auf Basis von Streckenprofil (Steigung) und Athleten-FTP
-- **Verpflegungsplanung** – Flaschenkonfiguration (Anzahl, Größe, Inhalt), Gel-Auswahl nach Hersteller/Produktlinie, automatische Verpflegungs-Timeline auf Basis der gewünschten Kohlenhydratrate; Mindesthydrierungs-Warnung (500 ml/h)
-- **Feedzonen** – Verpflegungsstationen entlang der Strecke platzieren, inkl. Empfehlung was dem Athleten dort übergeben werden soll
-- **Kartenansicht & Höhenprofil** – interaktive Karte (Route, Verpflegungspunkte, Anstiege, Gipfel) und Höhenprofil mit eingezeichneten Verpflegungsmarken
-- **PDF-Export** – Rennplan mit Athletenfoto, Streckendaten und Verpflegungstabelle sowie ein zweites Blatt mit vertikalem Höhenprofil zum Ausschneiden und aufs Oberrohr kleben
+- **Athletenverwaltung** – Athleten anlegen/bearbeiten/löschen, Foto (EXIF-Ausrichtung wird automatisch korrigiert), Gewicht, Geburtsjahr, Standard-Kohlenhydratrate
+- **Trainingsdaten-Analyse** – Import von `.csv`, `.fit`, `.gpx` sowie gzip-komprimierten Strava-Exports (`.fit.gz`, `.gpx.gz`), auch mehrere Dateien gleichzeitig; automatische Berechnung von FTP, maximaler Herzfrequenz und Leistungskurve (Mean Maximal Power über alle Trainingsdateien kombiniert)
+- **Streckenverwaltung** – GPX/CSV-Strecken hochladen (mit Bestätigung), speichern, wiederverwenden und wieder löschen; automatische Höhenprofil-, Distanz- und Höhenmeter-Berechnung
+- **Zielzeit-Kalkulation** – Geschwindigkeitsvorschlag auf Basis von Streckenprofil (Steigung) und Athleten-FTP; die Zielzeit lässt sich zusätzlich frei über Stunden/Minuten-Eingabefelder anpassen
+- **Verpflegungsplanung** – Flaschenkonfiguration (Anzahl, Größe, Inhalt inkl. Produktlinie bei Marken mit mehreren Varianten), Gel-Auswahl nach Hersteller/Produktlinie, automatische Verpflegungs-Timeline auf Basis der gewünschten Kohlenhydratrate; Mindesthydrierungs-Warnung (500 ml/h), die den gesamten Flaschen- und Feedzonen-Bestand kumulativ berücksichtigt (Restvolumen aus noch nicht leeren Flaschen fließt korrekt mit ein)
+- **Feedzonen** – Verpflegungsstationen entlang der Strecke platzieren (Position frei über km-Eingabefeld); pro Feedzone wird explizit festgelegt, wie viele Flaschen (mit Größe/Inhalt) und Gele dort übergeben werden. Feedzonen-Übergaben erscheinen gelb hervorgehoben in der Verpflegungstabelle und als eigene Markierung im Höhenprofil
+- **Kartenansicht & Höhenprofil** – interaktive Karte (Route, Flaschen-/Gel-/Riegel-Marker, Anstiege, Gipfel) sowie ein Höhenprofil über die volle Breite mit eingezeichneten Verpflegungs- und Feedzonen-Marken
+- **PDF-Export** – Rennplan mit Athletenfoto, Streckendaten und Verpflegungstabelle (Feedzonen gelb markiert) sowie ein zweites Blatt mit vertikalem Höhenprofil zum Ausschneiden und aufs Oberrohr kleben
 
 ## Projektstruktur
 
@@ -58,11 +58,13 @@ Die App ist danach unter `http://localhost:8501` erreichbar.
 ## Bedienung
 
 1. **Athlet anlegen/auswählen** – links oben über die Athleten-Auswahl bzw. den "+"-Button.
-2. **Strecke einstellen** – gespeicherte Strecke wählen oder neue GPX/CSV-Datei hochladen; Zielzeit wird automatisch vorgeschlagen und lässt sich im selben Bereich manuell anpassen.
-3. **Verpflegung einstellen** – Flaschenanzahl, -größe und -inhalt sowie Gel-Hersteller/Produktlinie festlegen; die Kohlenhydratrate lässt sich dort ebenfalls anpassen.
-4. **Feedzonen** – bei Bedarf Verpflegungsstationen entlang der Strecke einplanen (Positionierung in 10-km-Schritten).
-5. **Trainingsdaten** – rechts können Trainingsdateien hochgeladen, umbenannt oder gelöscht werden; FTP und Leistungskurve werden automatisch aus allen Dateien des Athleten berechnet.
+2. **Strecke einstellen** – gespeicherte Strecke wählen, löschen oder neue GPX/CSV-Datei hochladen (mit Bestätigung); die Zielzeit wird automatisch vorgeschlagen und lässt sich im selben Bereich über Stunden/Minuten-Felder frei anpassen.
+3. **Verpflegung einstellen** – Flaschenanzahl, -größe und -inhalt (bei Marken mit mehreren Produkten zusätzlich die Produktlinie) sowie Gel-Hersteller/Produktlinie festlegen; die Kohlenhydratrate lässt sich dort ebenfalls anpassen. Erscheint eine Warnung zur Mindesthydrierung, hilft meist eine größere Flasche oder eine zusätzliche Feedzone.
+4. **Feedzonen** – bei Bedarf Verpflegungsstationen entlang der Strecke einplanen: Position (km) sowie Anzahl/Größe/Inhalt der dort übergebenen Flaschen und Anzahl der Gele festlegen.
+5. **Trainingsdaten** – rechts können Trainingsdateien (auch mehrere gleichzeitig) hochgeladen, umbenannt oder gelöscht werden; FTP und Leistungskurve werden automatisch aus allen Dateien des Athleten berechnet.
 6. **PDF exportieren** – über den Button "Save Plan (PDF)" links unten.
+
+Über die Checkbox "Streamlit-Menü anzeigen" unten links lässt sich bei Bedarf die native Streamlit-Werkzeugleiste (Rerun, Settings, Deploy, …) wieder einblenden, die standardmäßig ausgeblendet ist.
 
 ## Datenablage
 
